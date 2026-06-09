@@ -154,21 +154,3 @@ You have too many Blueprints!
 ```
 
 That inventory-full state should be reset manually for now.
-
-## Repository release sequence
-
-Suggested tags:
-
-```text
-v1.0
-v1.2
-v1.3
-```
-
-Suggested release titles:
-
-```text
-CIC Tool v1.0 - Working ADB rebuild loop
-CIC Tool v1.2 - Safe Marker
-CIC Tool v1.3 - Reward selection and cleanup
-```
