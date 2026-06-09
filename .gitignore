@@ -1,0 +1,41 @@
+# Python caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Runtime logs and screenshots
+logs/
+*.log
+
+# Calibration backups generated while editing targets
+data/calibration/backups/
+data/calibration/adb_bot_config.backup_*.json
+
+# Temporary/debug files
+tmp/
+temp/
+*.tmp
+
+# Local IDE/editor state
+.vscode/
+.idea/
+*.suo
+*.user
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Release archives should be uploaded to GitHub Releases, not committed
+*.zip
+*.7z
+*.rar
