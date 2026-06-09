@@ -33,6 +33,8 @@ class BotGui(tk.Tk):
         self.auto_train_var = tk.BooleanVar(value=True)
         self.hire_enabled_var = tk.BooleanVar(value=False)
         self.hire_level_var = tk.StringVar(value="45")
+        self.max_iterations_enabled_var = tk.BooleanVar(value=False)
+        self.max_iterations_var = tk.StringVar(value="500")
 
         self.running_var = tk.StringVar(value="Stopped")
         self.screen_var = tk.StringVar(value="UNKNOWN")
@@ -92,6 +94,18 @@ class BotGui(tk.Tk):
         tk.Label(row3, text="Hire/setup level").pack(side=tk.LEFT, padx=(18, 0))
         tk.Entry(row3, textvariable=self.hire_level_var, width=8).pack(side=tk.LEFT, padx=(6, 0))
 
+        row4 = tk.Frame(controls)
+        row4.pack(fill=tk.X, pady=(8, 0))
+
+        tk.Checkbutton(
+            row4,
+            text="Stop after max loop iterations",
+            variable=self.max_iterations_enabled_var,
+        ).pack(side=tk.LEFT)
+
+        tk.Label(row4, text="Max iterations").pack(side=tk.LEFT, padx=(18, 0))
+        tk.Entry(row4, textvariable=self.max_iterations_var, width=8).pack(side=tk.LEFT, padx=(6, 0))
+
         note = tk.Label(
             controls,
             anchor="w",
@@ -148,6 +162,7 @@ class BotGui(tk.Tk):
             stuck_seconds = self._read_positive_float(self.stuck_seconds_var.get(), "Stuck seconds")
             scan_interval = self._read_positive_float(self.scan_interval_var.get(), "Scan interval")
             hire_level = self._read_positive_int(self.hire_level_var.get(), "Hire/setup level")
+            max_iterations = self._read_positive_int(self.max_iterations_var.get(), "Max iterations")
         except ValueError as exc:
             messagebox.showerror("Invalid loop setting", str(exc))
             return
@@ -161,6 +176,8 @@ class BotGui(tk.Tk):
             auto_train_missing_digits=self.auto_train_var.get(),
             hire_enabled=self.hire_enabled_var.get(),
             hire_setup_level=hire_level,
+            max_iterations_enabled=self.max_iterations_enabled_var.get(),
+            max_iterations=max_iterations,
         )
         self.worker.start()
         self.start_button.config(state=tk.DISABLED)

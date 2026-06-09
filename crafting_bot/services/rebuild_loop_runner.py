@@ -18,6 +18,7 @@ from crafting_bot.services.expected_level_scanner import ExpectedLevelScanner
 from crafting_bot.services.hire_runner import HireRunner
 from crafting_bot.services.level_scanner import LevelScanner
 from crafting_bot.services.reincarnation_runner import ReincarnationRunner
+from crafting_bot.services.recovery_runner import RecoveryRunner
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,7 @@ class RebuildLoopRunner:
         auto_digit_trainer: AutoDigitTrainingService | None = None,
         reincarnation_runner: ReincarnationRunner | None = None,
         hire_runner: HireRunner | None = None,
+        recovery_runner: RecoveryRunner | None = None,
     ) -> None:
         self.scanner = scanner
         self.expected_scanner = expected_scanner
@@ -55,6 +57,7 @@ class RebuildLoopRunner:
         self.auto_digit_trainer = auto_digit_trainer
         self.reincarnation_runner = reincarnation_runner
         self.hire_runner = hire_runner
+        self.recovery_runner = recovery_runner
 
     def run(
         self,
@@ -180,6 +183,24 @@ class RebuildLoopRunner:
                     ),
                 )
                 self._record_iteration(iterations, iteration, on_iteration)
+                recovered = self._attempt_safe_recovery(
+                    index=index,
+                    mode=mode,
+                    context="general",
+                    scan=scan,
+                    same_level_seconds=0.0,
+                    trigger_reason="unknown_level",
+                    iterations=iterations,
+                    callback=on_iteration,
+                    stop_event=stop_event,
+                )
+                if recovered:
+                    last_level = None
+                    same_level_started = time.monotonic()
+                    if self._sleep_interruptible(scan_interval_seconds, stop_event):
+                        stopped_reason = "stop_requested"
+                        break
+                    continue
                 if stop_on_scan_failure:
                     stopped_reason = "unknown_level"
                     break
@@ -199,6 +220,24 @@ class RebuildLoopRunner:
                     message=scan.message,
                 )
                 self._record_iteration(iterations, iteration, on_iteration)
+                recovered = self._attempt_safe_recovery(
+                    index=index,
+                    mode=mode,
+                    context="general",
+                    scan=scan,
+                    same_level_seconds=0.0,
+                    trigger_reason="scan_failed",
+                    iterations=iterations,
+                    callback=on_iteration,
+                    stop_event=stop_event,
+                )
+                if recovered:
+                    last_level = None
+                    same_level_started = time.monotonic()
+                    if self._sleep_interruptible(scan_interval_seconds, stop_event):
+                        stopped_reason = "stop_requested"
+                        break
+                    continue
                 if stop_on_scan_failure:
                     stopped_reason = "scan_failed"
                     break
@@ -263,6 +302,24 @@ class RebuildLoopRunner:
                             stopped_reason = "stop_requested"
                             break
                         if not reincarnation_success:
+                            recovered = self._attempt_safe_recovery(
+                                index=index,
+                                mode=mode,
+                                context="reincarnation",
+                                scan=scan,
+                                same_level_seconds=same_level_seconds,
+                                trigger_reason="reincarnation_failed",
+                                iterations=iterations,
+                                callback=on_iteration,
+                                stop_event=stop_event,
+                            )
+                            if recovered:
+                                last_level = None
+                                same_level_started = time.monotonic()
+                                if self._sleep_interruptible(scan_interval_seconds, stop_event):
+                                    stopped_reason = "stop_requested"
+                                    break
+                                continue
                             stopped_reason = "reincarnation_failed"
                             break
 
@@ -339,6 +396,24 @@ class RebuildLoopRunner:
                     stopped_reason = "stop_requested"
                     break
                 if not hire_success:
+                    recovered = self._attempt_safe_recovery(
+                        index=index,
+                        mode=mode,
+                        context="hire",
+                        scan=scan,
+                        same_level_seconds=same_level_seconds,
+                        trigger_reason="hire_failed",
+                        iterations=iterations,
+                        callback=on_iteration,
+                        stop_event=stop_event,
+                    )
+                    if recovered:
+                        last_level = None
+                        same_level_started = time.monotonic()
+                        if self._sleep_interruptible(scan_interval_seconds, stop_event):
+                            stopped_reason = "stop_requested"
+                            break
+                        continue
                     stopped_reason = "hire_failed"
                     break
 
@@ -458,6 +533,24 @@ class RebuildLoopRunner:
                 break
 
             if not success and stop_on_cycle_failure:
+                recovered = self._attempt_safe_recovery(
+                    index=index,
+                    mode=mode,
+                    context="rebuild",
+                    scan=scan,
+                    same_level_seconds=same_level_seconds,
+                    trigger_reason="cycle_failed",
+                    iterations=iterations,
+                    callback=on_iteration,
+                    stop_event=stop_event,
+                )
+                if recovered:
+                    last_level = None
+                    same_level_started = time.monotonic()
+                    if self._sleep_interruptible(scan_interval_seconds, stop_event):
+                        stopped_reason = "stop_requested"
+                        break
+                    continue
                 stopped_reason = "cycle_failed"
                 break
 
@@ -490,6 +583,82 @@ class RebuildLoopRunner:
                 + (f" hire_enabled=yes, hire_setup_level={hire_setup_level}." if hire_enabled else "")
             ),
         )
+
+
+    def _attempt_safe_recovery(
+        self,
+        *,
+        index: int,
+        mode: ExecutionMode,
+        context: str,
+        scan: LevelScanResult,
+        same_level_seconds: float,
+        trigger_reason: str,
+        iterations: list[LoopIterationResult],
+        callback: Callable[[LoopIterationResult], None] | None,
+        stop_event: Any | None,
+    ) -> bool:
+        """Try one bounded safe recovery action and report it as an iteration.
+
+        This first integration intentionally allows only the safe recovery path
+        exposed by RecoveryRunner. Forward-click recovery for Take Reward / Free
+        remains disabled inside the unattended loop.
+        """
+        if mode != "click":
+            return False
+        if self.recovery_runner is None:
+            return False
+        if self._stop_requested(stop_event):
+            return False
+
+        try:
+            result = self.recovery_runner.run(
+                context=context,  # type: ignore[arg-type]
+                execute=True,
+                allow_forward_clicks=False,
+            )
+        except Exception as exc:
+            iteration = LoopIterationResult(
+                index=index,
+                action="recovery",
+                scan=scan,
+                same_level_seconds=same_level_seconds,
+                trigger_reason=f"{trigger_reason}_recovery_error",
+                cycle_result=None,
+                message=f"Safe recovery failed before execution: {exc}",
+            )
+            self._record_iteration(iterations, iteration, callback)
+            return False
+
+        before_screen = result.before.screen
+        after_screen = result.after.screen if result.after is not None else "UNKNOWN"
+        executed = result.execution.action_executed if result.execution is not None else "dry_run"
+        exec_message = result.execution.message if result.execution is not None else "No execution result."
+
+        recovered_to_level = bool(
+            result.ok
+            and result.after is not None
+            and result.after.screen == "LEVEL_SCREEN"
+            and executed not in {"none", "resume", "blocked", "unsupported", "dry_run"}
+        )
+
+        iteration = LoopIterationResult(
+            index=index,
+            action="recovery",
+            scan=scan,
+            same_level_seconds=same_level_seconds,
+            trigger_reason=f"{trigger_reason}_safe_recovery",
+            cycle_result=None,
+            message=(
+                f"Safe recovery attempted after {trigger_reason}: "
+                f"before={before_screen}, action={result.decision.action}, executed={executed}, "
+                f"after={after_screen}, recovered_to_level={'yes' if recovered_to_level else 'no'}. "
+                f"{exec_message}"
+            ),
+        )
+        self._record_iteration(iterations, iteration, callback)
+        return recovered_to_level
+
 
     def _expected_current_level(self, cycle_start_levels: list[int]) -> int | None:
         previous_two = self._last_two_consecutive_levels(cycle_start_levels)

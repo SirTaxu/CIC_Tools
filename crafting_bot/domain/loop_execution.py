@@ -6,7 +6,7 @@ from typing import Literal
 from crafting_bot.domain.cycle_execution import CycleExecutionResult, ExecutionMode
 from crafting_bot.domain.models import LevelScanResult
 
-LoopAction = Literal["wait", "cycle", "hire", "reincarnate", "stop", "failed"]
+LoopAction = Literal["wait", "cycle", "hire", "reincarnate", "recovery", "stop", "failed"]
 
 
 @dataclass(frozen=True)

@@ -16,6 +16,8 @@ from crafting_bot.services.hire_runner import HireRunner
 from crafting_bot.services.level_scanner import LevelScanner
 from crafting_bot.services.rebuild_loop_runner import RebuildLoopRunner
 from crafting_bot.services.reincarnation_runner import ReincarnationRunner
+from crafting_bot.services.recovery_runner import RecoveryRunner
+from crafting_bot.services.screen_classifier import ScreenClassifier
 from crafting_bot.services.screen_verifier import ScreenVerifier
 from crafting_bot.services.screen_waiter import ScreenWaiter
 from crafting_bot.services.search_target_service import SearchTargetService
@@ -171,6 +173,19 @@ class BotContainer:
             scanner=self.build_level_scanner(),
         )
 
+    def build_screen_classifier(self) -> ScreenClassifier:
+        return ScreenClassifier(
+            calibration=self.build_calibration_store(),
+            scanner=self.build_level_scanner(),
+        )
+
+    def build_recovery_runner(self) -> RecoveryRunner:
+        return RecoveryRunner(
+            classifier=self.build_screen_classifier(),
+            adb=self.build_adb_client(),
+            calibration=self.build_calibration_store(),
+        )
+
     def build_rebuild_loop_runner(self) -> RebuildLoopRunner:
         return RebuildLoopRunner(
             scanner=self.build_level_scanner(),
@@ -178,6 +193,7 @@ class BotContainer:
             cycle_runner=self.build_cycle_runner(),
             reincarnation_runner=self.build_reincarnation_runner(),
             hire_runner=self.build_hire_runner(),
+            recovery_runner=self.build_recovery_runner(),
         )
 
     def build_bot_controller(self) -> BotController:

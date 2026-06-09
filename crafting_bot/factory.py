@@ -16,6 +16,8 @@ from crafting_bot.services.hire_runner import HireRunner
 from crafting_bot.services.level_scanner import LevelScanner
 from crafting_bot.services.rebuild_loop_runner import RebuildLoopRunner
 from crafting_bot.services.reincarnation_runner import ReincarnationRunner
+from crafting_bot.services.recovery_runner import RecoveryRunner
+from crafting_bot.services.screen_classifier import ScreenClassifier
 from crafting_bot.services.screen_verifier import ScreenVerifier
 from crafting_bot.services.screen_waiter import ScreenWaiter
 from crafting_bot.services.search_target_service import SearchTargetService
@@ -89,6 +91,14 @@ def build_hire_runner() -> HireRunner:
 
 def build_reincarnation_runner() -> ReincarnationRunner:
     return _container().build_reincarnation_runner()
+
+
+def build_screen_classifier() -> ScreenClassifier:
+    return _container().build_screen_classifier()
+
+
+def build_recovery_runner() -> RecoveryRunner:
+    return _container().build_recovery_runner()
 
 
 def build_rebuild_loop_runner() -> RebuildLoopRunner:

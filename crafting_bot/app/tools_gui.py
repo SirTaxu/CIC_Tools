@@ -22,11 +22,20 @@ class ToolDefinition:
     target_kind: str = "any"
     default_target: str | None = None
     description: str = ""
+    extra_args: tuple[str, ...] = ()
 
 
 TOOLS: tuple[ToolDefinition, ...] = (
     ToolDefinition("ADB check", "crafting_bot.cli.adb_check", description="Check and auto-connect BlueStacks ADB."),
     ToolDefinition("Scan once", "crafting_bot.cli.scan_once", description="Run one level/ready scan."),
+    ToolDefinition("Classify screen", "crafting_bot.cli.classify_screen", description="Classify the current screen without clicking. No bag/anvil classifier is used."),
+    ToolDefinition("Recovery dry-run", "crafting_bot.cli.recovery_dry_run", description="Classify current screen and show suggested recovery. No clicks."),
+    ToolDefinition(
+        "Recover once",
+        "crafting_bot.cli.recover_once",
+        extra_args=("--click",),
+        description="Execute one safe recovery action. ESC/BACK actions only unless run manually with --allow-forward-clicks.",
+    ),
     ToolDefinition("List targets", "crafting_bot.cli.list_targets", description="Show configured, missing, and mismatched calibration targets."),
     ToolDefinition("Cycle report", "crafting_bot.cli.cycle_report", description="Show the draft level 1, levels 2-5, and level 6+ flow definitions."),
     ToolDefinition("Dry-run cycle decision", "crafting_bot.cli.dry_run_cycle", description="Scan current level and show which rebuild flow would run. No clicks."),
@@ -163,6 +172,7 @@ class ToolsGui(tk.Tk):
                 return
 
         args = [sys.executable, "-B", "-m", tool.module]
+        args.extend(tool.extra_args)
         if tool.needs_target:
             args.append(target)
         if tool.needs_digit:

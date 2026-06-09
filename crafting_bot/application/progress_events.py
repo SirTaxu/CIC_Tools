@@ -5,7 +5,7 @@ from typing import Literal
 
 from crafting_bot.domain.loop_execution import LoopIterationResult
 
-BotEventType = Literal["scan", "wait", "cycle", "hire", "reincarnate", "stop", "failed", "error"]
+BotEventType = Literal["scan", "wait", "cycle", "hire", "reincarnate", "recovery", "stop", "failed", "error"]
 
 
 @dataclass(frozen=True)
@@ -42,7 +42,7 @@ class BotProgressEvent:
             )
 
         event_type: BotEventType
-        if iteration.action in {"wait", "cycle", "hire", "reincarnate", "stop", "failed"}:
+        if iteration.action in {"wait", "cycle", "hire", "reincarnate", "recovery", "stop", "failed"}:
             event_type = iteration.action
         else:
             event_type = "scan"

@@ -10,6 +10,7 @@ TargetPhase = Literal[
     "level1_cycle",
     "early_cycle",
     "dynamic_cycle",
+    "classifier",
     "reward_later",
     "reincarnation_later",
     "hire_later",
@@ -48,6 +49,18 @@ TARGETS: tuple[TargetDefinition, ...] = (
     TargetDefinition("level_area", "area", "core", "Area containing the level number and ready star."),
     TargetDefinition("level_button", "point", "core", "Point to open the level/rebuild flow from the level screen."),
     TargetDefinition("game_area", "area", "core", "Full stable game viewport area."),
+
+    # Screen-classifier-only markers. These are separate from action check areas.
+    # They answer "what screen am I currently on?" rather than "did my last
+    # click reach the next expected step?". Keep them broad/stable and avoid
+    # variable numbers/rewards whenever possible.
+    TargetDefinition("classifier_rebuild_workshop_marker", "area", "classifier", "Classifier-only marker for the level 6+ Rebuild Workshop screen; prefer the Possible Rewards header/instructions area."),
+    TargetDefinition("classifier_take_reward_marker", "area", "classifier", "Classifier-only marker for the Take Reward screen; include stable panel/button identity, not changing reward values."),
+    TargetDefinition("classifier_free_screen_marker", "area", "classifier", "Classifier-only marker for the Free screen; include stable Free-button/panel identity."),
+    TargetDefinition("classifier_headquarters_marker", "area", "classifier", "Classifier-only marker for the Headquarters screen/tab."),
+    TargetDefinition("classifier_dynasty_marker", "area", "classifier", "Classifier-only marker for the Dynasty/reincarnation screen."),
+    TargetDefinition("classifier_reincarnation_confirm_marker", "area", "classifier", "Classifier-only marker for the final reincarnation confirmation/default screen."),
+    TargetDefinition("classifier_map_marker", "area", "classifier", "Classifier-only marker for the map screen that can appear after a missed level/rebuild click. Use a stable map-only area, not the top tabs."),
 
     # Fixed level 1 / levels 2-5 cycle targets. These names come from the old
     # calibration set. Rebuild and take-reward are shared across levels 1-5.
@@ -138,6 +151,7 @@ PHASE_ORDER: tuple[TargetPhase, ...] = (
     "level1_cycle",
     "early_cycle",
     "dynamic_cycle",
+    "classifier",
     "reward_later",
     "reincarnation_later",
     "hire_later",

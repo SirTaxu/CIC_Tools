@@ -30,9 +30,14 @@ class RebuildLoopWorker:
     status messages.
     """
 
-    # Safety cap for GUI runs. The visible stop condition should normally be
-    # desired_level or manual Stop, not this internal rebuild-cycle cap.
+    # Safety cap for GUI rebuild-cycle counting. The visible stop condition should
+    # normally be desired_level, reincarnation mode, or manual Stop.
     _GUI_MAX_REBUILD_CYCLES = 10000
+
+    # Used when the optional GUI iteration safety is disabled. This is kept as a
+    # finite value because the lower-level runner currently expects an integer.
+    # At one scan per second it is effectively unlimited for normal runs.
+    _GUI_UNLIMITED_MAX_ITERATIONS = 10_000_000
 
     def __init__(
         self,
@@ -46,6 +51,8 @@ class RebuildLoopWorker:
         hire_enabled: bool = False,
         hire_setup_level: int = 45,
         hire_drag_duration_ms: int = 750,
+        max_iterations_enabled: bool = False,
+        max_iterations: int = 500,
     ) -> None:
         self.event_queue = event_queue
         self.desired_level = max(1, int(desired_level))
@@ -56,6 +63,8 @@ class RebuildLoopWorker:
         self.hire_enabled = bool(hire_enabled)
         self.hire_setup_level = max(1, int(hire_setup_level))
         self.hire_drag_duration_ms = max(100, int(hire_drag_duration_ms))
+        self.max_iterations_enabled = bool(max_iterations_enabled)
+        self.max_iterations = max(1, int(max_iterations))
 
         self.stop_requested = threading.Event()
         self.thread: threading.Thread | None = None
@@ -81,7 +90,9 @@ class RebuildLoopWorker:
                 message=(
                     f"Starting rebuild loop toward level {self.desired_level}. "
                     f"Reincarnation={'on' if self.reincarnation_enabled else 'off'}, "
-                    f"hire setup={'on' if self.hire_enabled else 'off'} at level {self.hire_setup_level}."
+                    f"hire setup={'on' if self.hire_enabled else 'off'} at level {self.hire_setup_level}, "
+                    f"iteration safety={'on' if self.max_iterations_enabled else 'off'}"
+                    f"{f' ({self.max_iterations})' if self.max_iterations_enabled else ''}."
                 ),
             )
         )
@@ -105,6 +116,12 @@ class RebuildLoopWorker:
     def _run(self) -> None:
         try:
             controller = build_bot_controller()
+            effective_max_iterations = (
+                self.max_iterations
+                if self.max_iterations_enabled
+                else self._GUI_UNLIMITED_MAX_ITERATIONS
+            )
+
             settings = RebuildLoopSettings(
                 mode="click",
                 max_cycles=self._GUI_MAX_REBUILD_CYCLES,
@@ -117,6 +134,7 @@ class RebuildLoopWorker:
                 hire_enabled=self.hire_enabled,
                 hire_setup_level=self.hire_setup_level,
                 hire_drag_duration_ms=self.hire_drag_duration_ms,
+                max_iterations=effective_max_iterations,
             )
             result = controller.run_rebuild_loop(
                 settings,

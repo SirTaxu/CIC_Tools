@@ -80,6 +80,24 @@ class AdbClient:
             capture_output=True,
         )
 
+    def keyevent(self, key: str | int) -> None:
+        """Send an Android keyevent through ADB.
+
+        The recovery system uses this for ESC/BACK-style recovery. For Android,
+        KEYCODE_BACK is the safest equivalent to pressing ESC in BlueStacks for
+        returning from most menus.
+        """
+        self.ensure_device()
+        self._run_device(["shell", "input", "keyevent", str(key)], capture_output=True)
+
+    def press_back(self) -> None:
+        """Press Android Back once.
+
+        BlueStacks maps the physical ESC key to the same general behavior for
+        the game, but using ADB KEYCODE_BACK avoids keyboard focus issues.
+        """
+        self.keyevent("KEYCODE_BACK")
+
     def ensure_device(self) -> str:
         """Return a connected ADB device serial, trying BlueStacks auto-connect if needed."""
         devices = self.list_devices()

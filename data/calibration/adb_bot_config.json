@@ -233,6 +233,48 @@
       "y": 171,
       "width": 154,
       "height": 120
+    },
+    "classifier_rebuild_workshop_marker": {
+      "x": 421,
+      "y": 152,
+      "width": 600,
+      "height": 159
+    },
+    "classifier_take_reward_marker": {
+      "x": 684,
+      "y": 209,
+      "width": 492,
+      "height": 145
+    },
+    "classifier_free_screen_marker": {
+      "x": 424,
+      "y": 295,
+      "width": 752,
+      "height": 313
+    },
+    "classifier_headquarters_marker": {
+      "x": 10,
+      "y": 104,
+      "width": 200,
+      "height": 394
+    },
+    "classifier_dynasty_marker": {
+      "x": 74,
+      "y": 35,
+      "width": 385,
+      "height": 555
+    },
+    "classifier_reincarnation_confirm_marker": {
+      "x": 156,
+      "y": 180,
+      "width": 1183,
+      "height": 311
+    },
+    "classifier_map_marker": {
+      "x": 1490,
+      "y": 5,
+      "width": 109,
+      "height": 893
     }
   }
 }
