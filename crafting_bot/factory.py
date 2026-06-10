@@ -17,6 +17,7 @@ from crafting_bot.services.level_scanner import LevelScanner
 from crafting_bot.services.rebuild_loop_runner import RebuildLoopRunner
 from crafting_bot.services.reincarnation_runner import ReincarnationRunner
 from crafting_bot.services.recovery_runner import RecoveryRunner
+from crafting_bot.services.reward_selection_service import RewardSelectionService
 from crafting_bot.services.screen_classifier import ScreenClassifier
 from crafting_bot.services.screen_verifier import ScreenVerifier
 from crafting_bot.services.screen_waiter import ScreenWaiter
@@ -79,6 +80,10 @@ def build_screen_verifier() -> ScreenVerifier:
 
 def build_screen_waiter() -> ScreenWaiter:
     return _container().build_screen_waiter()
+
+
+def build_reward_selection_service() -> RewardSelectionService:
+    return _container().build_reward_selection_service()
 
 
 def build_cycle_runner() -> CycleRunner:

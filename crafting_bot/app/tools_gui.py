@@ -29,6 +29,7 @@ TOOLS: tuple[ToolDefinition, ...] = (
     ToolDefinition("ADB check", "crafting_bot.cli.adb_check", description="Check and auto-connect BlueStacks ADB."),
     ToolDefinition("Scan once", "crafting_bot.cli.scan_once", description="Run one level/ready scan."),
     ToolDefinition("Classify screen", "crafting_bot.cli.classify_screen", description="Classify the current screen without clicking. No bag/anvil classifier is used."),
+    ToolDefinition("Analyze rewards", "crafting_bot.cli.analyze_rewards", description="Analyze Rebuild Workshop reward layout and show planned selection. No clicks from tools GUI."),
     ToolDefinition("Recovery dry-run", "crafting_bot.cli.recovery_dry_run", description="Classify current screen and show suggested recovery. No clicks."),
     ToolDefinition(
         "Recover once",
@@ -146,9 +147,16 @@ class ToolsGui(tk.Tk):
         }
 
     def _select_default_target(self) -> None:
-        if "rebuild_button_check_area" in self._target_names_by_kind["any"]:
-            self.target_var.set("rebuild_button_check_area")
-        elif self._target_names_by_kind["any"]:
+        preferred_targets = (
+            "reward_slider_default_point",
+            "rebuild_workshop_check_area",
+            "level_area",
+        )
+        for target_name in preferred_targets:
+            if target_name in self._target_names_by_kind["any"]:
+                self.target_var.set(target_name)
+                return
+        if self._target_names_by_kind["any"]:
             self.target_var.set(self._target_names_by_kind["any"][0])
 
     def _set_target_filter(self, kind: str) -> None:

@@ -21,7 +21,7 @@ def _load_screenshot(path: Path | None) -> Image.Image:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Calibrate one point or area target from a live ADB screenshot.")
-    parser.add_argument("target", help="Target name, for example rebuild_button_check_area or rebuild_button")
+    parser.add_argument("target", help="Target name, for example level_area, reward_slider_default_point, or classifier_map_marker")
     parser.add_argument(
         "--kind",
         choices=("point", "area"),

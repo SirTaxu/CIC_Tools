@@ -17,6 +17,7 @@ RecoveryContextName = Literal[
 RecoveryAction = Literal[
     "none",
     "resume",
+    "safe_return_to_level",
     "press_esc_once",
     "press_esc_twice_slowly",
     "click_take_reward",

@@ -4,11 +4,12 @@ from crafting_bot.domain.recovery import RecoveryDecision, RecoveryRequest
 
 
 class RecoveryPolicy:
-    """Decides what recovery action would be safe from a classified screen.
+    """Decides the safest bounded recovery action from a classified screen.
 
-    This policy is dry-run/decision-only. It does not click, press ESC, or
-    resume the bot. Recovery execution should be added only after these
-    decisions are validated from real screenshots.
+    The policy is context-aware. It allows forward recovery from Take Reward /
+    Free only because those screens cannot be escaped safely; the bot must finish
+    the rebuild cycle from there. Other unexpected screens are returned to the
+    level screen with slow BACK/ESC recovery.
     """
 
     def decide(self, request: RecoveryRequest) -> RecoveryDecision:
@@ -27,8 +28,11 @@ class RecoveryPolicy:
             return RecoveryDecision(
                 action="click_take_reward",
                 risk="guarded",
-                reason="Take Reward does not close with ESC. Recovery should move forward by clicking the calibrated Take Reward button.",
-                expected_after_action="FREE_SCREEN",
+                reason=(
+                    "Take Reward does not close with ESC. The only safe recovery is to finish "
+                    "the rebuild phase: click Take Reward, then Free, then return to LEVEL_SCREEN."
+                ),
+                expected_after_action="LEVEL_SCREEN",
                 never_use_esc=True,
             )
 
@@ -36,75 +40,80 @@ class RecoveryPolicy:
             return RecoveryDecision(
                 action="click_free",
                 risk="guarded",
-                reason="Free screen does not close with ESC. Recovery should move forward by clicking the calibrated Free button.",
+                reason=(
+                    "Free screen does not close with ESC. The only safe recovery is to click "
+                    "Free and return to LEVEL_SCREEN."
+                ),
                 expected_after_action="LEVEL_SCREEN",
                 never_use_esc=True,
             )
 
-        if screen == "REBUILD_WORKSHOP":
-            if context == "rebuild":
-                return RecoveryDecision(
-                    action="continue_rebuild",
-                    risk="guarded",
-                    reason="Still in the rebuild flow. Recovery can continue by finding/clicking the dynamic Rebuild now button.",
-                    expected_after_action="TAKE_REWARD_SCREEN",
-                )
-
+        if screen == "REINCARNATION_CONFIRM_SCREEN" and context == "reincarnation":
             return RecoveryDecision(
-                action="press_esc_twice_slowly",
+                action="continue_reincarnation",
                 risk="guarded",
                 reason=(
-                    "Unexpected Rebuild Workshop outside rebuild context. The first ESC/BACK returns to MAP_SCREEN, "
-                    "and a second slow ESC/BACK returns to LEVEL_SCREEN."
+                    "The bot is intentionally in the reincarnation flow. Continue by clicking "
+                    "the calibrated Default button and verify LEVEL_SCREEN."
                 ),
                 expected_after_action="LEVEL_SCREEN",
-                esc_presses=2,
+                never_use_esc=True,
+            )
+
+        if screen == "REINCARNATION_CONFIRM_SCREEN":
+            return RecoveryDecision(
+                action="safe_return_to_level",
+                risk="guarded",
+                reason=(
+                    "Unexpected reincarnation confirmation screen. Return with slow BACK/ESC "
+                    "recovery. This can require two presses, so use safe taps and delays."
+                ),
+                expected_after_action="LEVEL_SCREEN",
+                esc_presses=3,
+                delay_between_esc_seconds=1.0,
+            )
+
+        if screen == "REBUILD_WORKSHOP":
+            return RecoveryDecision(
+                action="safe_return_to_level",
+                risk="guarded",
+                reason=(
+                    "Unexpected Rebuild Workshop. Return to LEVEL_SCREEN instead of continuing "
+                    "with possibly tainted cycle state. This may pass through MAP_SCREEN."
+                ),
+                expected_after_action="LEVEL_SCREEN",
+                esc_presses=3,
                 delay_between_esc_seconds=1.0,
             )
 
         if screen == "MAP_SCREEN":
             return RecoveryDecision(
-                action="press_esc_once",
+                action="safe_return_to_level",
                 risk="safe",
-                reason="Map screen likely came from a missed/open-level click. One ESC should return to the level screen.",
+                reason="Map screen likely came from a missed/open-level click. Return to LEVEL_SCREEN with BACK/ESC.",
                 expected_after_action="LEVEL_SCREEN",
-                esc_presses=1,
+                esc_presses=3,
+                delay_between_esc_seconds=1.0,
             )
 
         if screen in {"HEADQUARTERS_SCREEN", "DYNASTY_SCREEN"}:
             return RecoveryDecision(
-                action="press_esc_once",
+                action="safe_return_to_level",
                 risk="safe",
-                reason=f"{screen} is a regular menu. One ESC should return toward the level screen.",
+                reason=f"{screen} is a regular menu. Return to LEVEL_SCREEN with slow BACK/ESC recovery.",
                 expected_after_action="LEVEL_SCREEN",
-                esc_presses=1,
-            )
-
-        if screen == "REINCARNATION_CONFIRM_SCREEN":
-            if context == "reincarnation":
-                return RecoveryDecision(
-                    action="continue_reincarnation",
-                    risk="guarded",
-                    reason="The bot is intentionally in the reincarnation flow. Continue with the calibrated Default button.",
-                    expected_after_action="LEVEL_SCREEN",
-                )
-
-            return RecoveryDecision(
-                action="press_esc_twice_slowly",
-                risk="guarded",
-                reason="Unexpected reincarnation confirmation screen. It may require two ESC presses, with a 1-second delay, to avoid closing the game accidentally.",
-                expected_after_action="LEVEL_SCREEN",
-                esc_presses=2,
+                esc_presses=3,
                 delay_between_esc_seconds=1.0,
             )
 
         return RecoveryDecision(
-            action="press_esc_once",
+            action="safe_return_to_level",
             risk="guarded",
             reason=(
-                "Current screen is UNKNOWN. Dry-run recommendation is one ESC, then reclassify. "
-                "A second ESC should only be considered if the new screenshot is still UNKNOWN and different from the previous screenshot."
+                "Current screen is UNKNOWN. Try slow BACK/ESC recovery up to three presses. "
+                "Stop if the screenshot stays UNKNOWN and unchanged."
             ),
             expected_after_action="LEVEL_SCREEN",
-            esc_presses=1,
+            esc_presses=3,
+            delay_between_esc_seconds=1.0,
         )

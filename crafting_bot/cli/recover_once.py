@@ -24,6 +24,12 @@ def main() -> None:
         action="store_true",
         help="Allow Take Reward / Free forward-click recovery. ESC/BACK actions do not need this.",
     )
+    parser.add_argument(
+        "--current-level",
+        type=int,
+        default=None,
+        help="Optional current level, used to choose early vs normal Reward/Free recovery targets.",
+    )
     args = parser.parse_args()
 
     calibration = build_calibration_store()
@@ -42,6 +48,7 @@ def main() -> None:
         context=args.context,
         execute=args.click,
         allow_forward_clicks=args.allow_forward_clicks,
+        current_level=args.current_level,
     )
 
     before = result.before
@@ -74,6 +81,7 @@ def main() -> None:
         print(f"after_matched_target: {after.matched_target}")
         print(f"after_score: {after.score}")
 
+    print(f"report_path: {result.report_path}")
     print(f"message: {result.message}")
 
 

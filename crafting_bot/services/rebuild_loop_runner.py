@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -106,6 +107,7 @@ class RebuildLoopRunner:
         confirmed_levels: list[int] = []
         cycle_start_levels: list[int] = []
         hire_done_this_climb = False
+        auto_digit_training_signatures: set[tuple[int, str, str]] = set()
 
         for index in range(1, max_iterations + 1):
             if self._stop_requested(stop_event):
@@ -127,6 +129,44 @@ class RebuildLoopRunner:
             scan = self._scan_with_tracking(expected_level)
             now = time.monotonic()
 
+            if (
+                scan.ok
+                and scan.level is None
+                and desired_level is not None
+                and reincarnation_enabled
+                and expected_level is not None
+                and expected_level >= desired_level
+            ):
+                # At the reincarnation boundary, an unknown level must not trigger
+                # digit auto-training for the old expected level. Example:
+                # desired level 82 is complete once visible level is 83. If tracking
+                # is still expecting 82 and the live screen is actually 83, training
+                # "level 82" from that crop pollutes the templates and can repeat
+                # indefinitely. First try one broad scan; if that cannot prove the
+                # level, stop safely and ask for inspection instead of training.
+                broad_boundary_scan = self.scanner.scan()
+                if broad_boundary_scan.ok and broad_boundary_scan.level is not None:
+                    scan = broad_boundary_scan
+                else:
+                    iteration = LoopIterationResult(
+                        index=index,
+                        action="failed",
+                        scan=scan,
+                        same_level_seconds=0.0,
+                        trigger_reason="reincarnation_boundary_unknown_level",
+                        cycle_result=None,
+                        message=(
+                            f"Stopped before digit auto-training at reincarnation boundary. "
+                            f"desired_level={desired_level}, expected_level={expected_level}, "
+                            f"reincarnation trigger level={desired_level + 1}. The tracked scan could not "
+                            "read the level, and a broad scan also could not prove the current level. "
+                            "This prevents training the previous level from a post-target crop."
+                        ),
+                    )
+                    self._record_iteration(iterations, iteration, on_iteration)
+                    stopped_reason = "reincarnation_boundary_unknown_level"
+                    break
+
             if scan.ok and scan.level is None and (assist_digit_training or auto_train_missing_digits):
                 candidate = self._build_auto_train_candidate(
                     scan,
@@ -135,6 +175,27 @@ class RebuildLoopRunner:
                     max_ready_template_score=auto_train_ready_template_max_score,
                 )
                 if candidate is not None:
+                    signature = self._auto_train_signature(candidate)
+                    if signature in auto_digit_training_signatures:
+                        iteration = LoopIterationResult(
+                            index=index,
+                            action="failed",
+                            scan=scan,
+                            same_level_seconds=0.0,
+                            trigger_reason="repeated_auto_digit_training_candidate",
+                            cycle_result=None,
+                            message=(
+                                "Stopped to prevent repeated digit auto-training from the same crop/signature. "
+                                f"expected_level={candidate.expected_level}, state={candidate.state}, "
+                                f"crop_hash={signature[2]}. This usually means training did not fix recognition "
+                                "or tracking is expecting the wrong level."
+                            ),
+                        )
+                        self._record_iteration(iterations, iteration, on_iteration)
+                        stopped_reason = "repeated_auto_digit_training_candidate"
+                        break
+
+                    auto_digit_training_signatures.add(signature)
                     training_result = self._maybe_train_missing_digits(
                         candidate,
                         ask=assist_digit_training and not auto_train_missing_digits,
@@ -195,6 +256,7 @@ class RebuildLoopRunner:
                     stop_event=stop_event,
                 )
                 if recovered:
+                    self._reset_tracking_after_recovery(confirmed_levels, cycle_start_levels)
                     last_level = None
                     same_level_started = time.monotonic()
                     if self._sleep_interruptible(scan_interval_seconds, stop_event):
@@ -232,6 +294,7 @@ class RebuildLoopRunner:
                     stop_event=stop_event,
                 )
                 if recovered:
+                    self._reset_tracking_after_recovery(confirmed_levels, cycle_start_levels)
                     last_level = None
                     same_level_started = time.monotonic()
                     if self._sleep_interruptible(scan_interval_seconds, stop_event):
@@ -545,6 +608,7 @@ class RebuildLoopRunner:
                     stop_event=stop_event,
                 )
                 if recovered:
+                    self._reset_tracking_after_recovery(confirmed_levels, cycle_start_levels)
                     last_level = None
                     same_level_started = time.monotonic()
                     if self._sleep_interruptible(scan_interval_seconds, stop_event):
@@ -585,6 +649,18 @@ class RebuildLoopRunner:
         )
 
 
+    @staticmethod
+    def _reset_tracking_after_recovery(
+        confirmed_levels: list[int],
+        cycle_start_levels: list[int],
+    ) -> None:
+        # Recovery may have used ESC/BACK or completed a partially finished
+        # cycle. After returning to LEVEL_SCREEN, throw away expected-level
+        # history and let the next scan behave like a fresh start.
+        confirmed_levels.clear()
+        cycle_start_levels.clear()
+
+
     def _attempt_safe_recovery(
         self,
         *,
@@ -600,9 +676,9 @@ class RebuildLoopRunner:
     ) -> bool:
         """Try one bounded safe recovery action and report it as an iteration.
 
-        This first integration intentionally allows only the safe recovery path
-        exposed by RecoveryRunner. Forward-click recovery for Take Reward / Free
-        remains disabled inside the unattended loop.
+        This integration runs one bounded recovery action. Rebuild-context recovery
+        can finish Take Reward / Free screens forward; other navigation recovery
+        returns to LEVEL_SCREEN with slow BACK/ESC handling.
         """
         if mode != "click":
             return False
@@ -615,7 +691,8 @@ class RebuildLoopRunner:
             result = self.recovery_runner.run(
                 context=context,  # type: ignore[arg-type]
                 execute=True,
-                allow_forward_clicks=False,
+                allow_forward_clicks=(context == "rebuild"),
+                current_level=scan.level,
             )
         except Exception as exc:
             iteration = LoopIterationResult(
@@ -650,10 +727,10 @@ class RebuildLoopRunner:
             trigger_reason=f"{trigger_reason}_safe_recovery",
             cycle_result=None,
             message=(
-                f"Safe recovery attempted after {trigger_reason}: "
+                f"Recovery attempted after {trigger_reason}: "
                 f"before={before_screen}, action={result.decision.action}, executed={executed}, "
-                f"after={after_screen}, recovered_to_level={'yes' if recovered_to_level else 'no'}. "
-                f"{exec_message}"
+                f"after={after_screen}, recovered_to_level={'yes' if recovered_to_level else 'no'}, "
+                f"report={result.report_path}. {exec_message}"
             ),
         )
         self._record_iteration(iterations, iteration, callback)
@@ -905,6 +982,14 @@ class RebuildLoopRunner:
         if current == previous + 1:
             return previous, current
         return None
+
+    @staticmethod
+    def _auto_train_signature(candidate: _AutoTrainCandidate) -> tuple[int, str, str]:
+        try:
+            digest = hashlib.sha1(candidate.crop_path.read_bytes()).hexdigest()[:12]
+        except Exception:
+            digest = hashlib.sha1(str(candidate.crop_path).encode("utf-8")).hexdigest()[:12]
+        return int(candidate.expected_level), candidate.state, digest
 
     @staticmethod
     def _format_auto_train_iteration_message(

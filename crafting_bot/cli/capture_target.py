@@ -8,7 +8,7 @@ from crafting_bot.factory import build_adb_client, build_calibration_service
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Refresh the saved crop image for one calibrated area target.")
-    parser.add_argument("target", help="Area target name, for example rebuild_button_check_area")
+    parser.add_argument("target", help="Area target name, for example rebuild_workshop_check_area or classifier_map_marker")
     args = parser.parse_args()
 
     adb = build_adb_client()

@@ -40,11 +40,8 @@ REINCARNATION_STEPS: tuple[ReincarnationStepDefinition, ...] = (
         action="click default reincarnation",
         target_name="default_button",
         verification_target="level_area",
-        fallback_point_names=("reincarnate_confirm",),
         notes=(
-            "Click Default. After click-mode is added later, this should verify that the level screen "
-            "returns to level 1. If default_button is not calibrated yet, the dry-run reports whether "
-            "the legacy reincarnate_confirm point exists as a fallback."
+            "Click Default, then verify that the level screen returns after reincarnation."
         ),
     ),
 )

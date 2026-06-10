@@ -15,6 +15,7 @@ from crafting_bot.services.level_scanner import LevelScanner
 from crafting_bot.services.screen_verifier import ScreenVerifier
 from crafting_bot.services.screen_waiter import ScreenWaiter
 from crafting_bot.services.search_target_service import SearchTargetService
+from crafting_bot.services.reward_selection_service import RewardSelectionService
 from crafting_bot.services.target_status_service import TargetStatusService
 
 
@@ -37,6 +38,7 @@ class CycleRunner:
         waiter: ScreenWaiter,
         target_status: TargetStatusService,
         latest_screenshot_path: Path,
+        reward_selector: RewardSelectionService | None = None,
     ) -> None:
         self.scanner = scanner
         self.adb = adb
@@ -46,6 +48,7 @@ class CycleRunner:
         self.waiter = waiter
         self.target_status = target_status
         self.latest_screenshot_path = latest_screenshot_path
+        self.reward_selector = reward_selector
 
     def run_once(
         self,
@@ -172,6 +175,14 @@ class CycleRunner:
             message = f"would click fixed point {point}" if point else "missing fixed point"
         elif step.mode == "search_target":
             message = "would wait for/search target on the live screen reached during execution"
+        elif step.mode == "screen_check" and step.target_name == "reward_selection":
+            if self.reward_selector is None:
+                message = "reward selector service is not wired"
+            else:
+                message = (
+                    "would select reward preference after Rebuild Workshop opens: "
+                    "click gems if detected, otherwise use the calibrated default slider point"
+                )
         verification = VerificationResult(step.verification_target, False, None, None, None, "Verification not attempted in planning.") if step.verification_target else None
         return StepExecutionResult(
             definition=step,
@@ -185,6 +196,49 @@ class CycleRunner:
             preview_path=preview_path,
             message=message,
         )
+
+    def _run_reward_selection_step(
+        self,
+        step: CycleStepDefinition,
+        *,
+        mode: ExecutionMode,
+        stop_event: Any | None = None,
+    ) -> StepExecutionResult:
+        if self.reward_selector is None:
+            return StepExecutionResult(
+                step,
+                "skipped",
+                mode,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                "Reward selector service is not wired; keeping previous cycle behavior.",
+            )
+
+        result = self.reward_selector.prepare_reward_selection(mode=mode, stop_event=stop_event)
+        outcome = "success" if result.ok else "failed"
+        if result.action in {"disabled_missing_calibration", "skip_default_already_selected"}:
+            outcome = "skipped" if result.ok else "failed"
+
+        return StepExecutionResult(
+            step,
+            outcome,
+            mode,
+            result.click_x,
+            result.click_y,
+            result.gems_score,
+            result.gems_present,
+            None,
+            result.preview_path,
+            (
+                f"Reward selection: action={result.action}, selected={result.selected_reward}, "
+                f"gems_present={'yes' if result.gems_present else 'no'}. {result.message}"
+            ),
+        )
+
 
     def _run_step(
         self,
@@ -212,6 +266,12 @@ class CycleRunner:
                 step_delay_seconds=step_delay_seconds,
                 wait_timeout_seconds=wait_timeout_seconds,
                 poll_interval_seconds=poll_interval_seconds,
+                stop_event=stop_event,
+            )
+        if step.mode == "screen_check" and step.target_name == "reward_selection":
+            return self._run_reward_selection_step(
+                step,
+                mode=mode,
                 stop_event=stop_event,
             )
         return StepExecutionResult(step, "skipped", mode, None, None, None, None, None, None, "Unsupported screen-check step in cycle runner.")

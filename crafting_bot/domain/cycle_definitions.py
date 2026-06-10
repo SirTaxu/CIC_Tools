@@ -70,9 +70,17 @@ CYCLE_DEFINITIONS: tuple[CycleDefinition, ...] = (
         ),
         steps=(
             CycleStepDefinition(1, "open rebuild workshop", "level_button", "fixed_point", "rebuild_workshop_check_area", "Wait for the Rebuild Workshop screen marker before any dynamic search/click."),
-            CycleStepDefinition(2, "find and click rebuild", "rebuild_button_dynamic", "search_target", "reward_button_check_area"),
-            CycleStepDefinition(3, "take reward", "reward_button", "fixed_point", "free_button_check_area"),
-            CycleStepDefinition(4, "click free", "free_button", "fixed_point", "level_area", "Verify by scanning the level screen again."),
+            CycleStepDefinition(
+                2,
+                "select reward preference",
+                "reward_selection",
+                "screen_check",
+                None,
+                "Gems are clicked directly when present. Otherwise the calibrated default slider point is clicked once and then remembered.",
+            ),
+            CycleStepDefinition(3, "find and click rebuild", "rebuild_button_dynamic", "search_target", "reward_button_check_area"),
+            CycleStepDefinition(4, "take reward", "reward_button", "fixed_point", "free_button_check_area"),
+            CycleStepDefinition(5, "click free", "free_button", "fixed_point", "level_area", "Verify by scanning the level screen again."),
         ),
     ),
 )

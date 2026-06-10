@@ -6,10 +6,6 @@
     "height": 900
   },
   "targets": {
-    "rebuild_button": {
-      "x": 993,
-      "y": 678
-    },
     "reward_button": {
       "x": 1011,
       "y": 630
@@ -21,30 +17,6 @@
     "bag_button": {
       "x": 384,
       "y": 288
-    },
-    "hire_button_1": {
-      "x": 258,
-      "y": 229
-    },
-    "hire_max_1": {
-      "x": 686,
-      "y": 227
-    },
-    "hire_button_2": {
-      "x": 264,
-      "y": 387
-    },
-    "hire_max_2": {
-      "x": 691,
-      "y": 383
-    },
-    "workshop_tab": {
-      "x": 206,
-      "y": 57
-    },
-    "event_tab": {
-      "x": 566,
-      "y": 53
     },
     "hq_button": {
       "x": 395,
@@ -58,19 +30,9 @@
       "x": 808,
       "y": 266
     },
-    "reincarnate_confirm": {
-      "x": 681,
-      "y": 616
-    },
     "level_button": {
       "x": 45,
       "y": 119
-    },
-    "rebuild_button_check_area": {
-      "x": 819,
-      "y": 649,
-      "width": 345,
-      "height": 57
     },
     "reward_button_check_area": {
       "x": 758,
@@ -140,10 +102,6 @@
       "width": 190,
       "height": 127
     },
-    "pre_rebuild_default_reward": {
-      "x": 933,
-      "y": 567
-    },
     "pre_rebuild_reward_slot_right": {
       "x": 1037,
       "y": 542,
@@ -155,16 +113,6 @@
       "y": 543,
       "width": 34,
       "height": 65
-    },
-    "game_icon": {
-      "x": 669,
-      "y": 246
-    },
-    "fame_counter_area": {
-      "x": 83,
-      "y": 117,
-      "width": 63,
-      "height": 24
     },
     "level_area": {
       "x": 14,
@@ -275,6 +223,26 @@
       "y": 5,
       "width": 109,
       "height": 893
+    },
+    "recovery_safe_tap": {
+      "x": 24,
+      "y": 879
+    },
+    "reward_slider_default_point": {
+      "x": 755,
+      "y": 649
+    },
+    "reward_gems_template": {
+      "x": 1045,
+      "y": 555,
+      "width": 27,
+      "height": 25
+    },
+    "reward_gems_search_area": {
+      "x": 1039,
+      "y": 472,
+      "width": 37,
+      "height": 224
     }
   }
 }

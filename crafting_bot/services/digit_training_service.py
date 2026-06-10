@@ -104,6 +104,26 @@ class DigitTrainingService:
         if not safe_source:
             safe_source = "manual"
 
+        existing_templates = sorted(self.template_dir.glob(f"digit_{digit}_{safe_source}_*_{digest}.png"))
+        if existing_templates:
+            template_path = existing_templates[0]
+            preview_path = self.preview_dir / f"{template_path.stem}_preview.png"
+            if not preview_path.exists():
+                save_preview(clean_crop, preview_path)
+
+            return DigitTrainingResult(
+                digit=digit,
+                template_path=template_path,
+                preview_path=preview_path,
+                width=clean_crop.width,
+                height=clean_crop.height,
+                message=(
+                    f"Skipped duplicate digit {digit} template: an identical {clean_crop.width}x{clean_crop.height} "
+                    f"normalized mask already exists at {template_path}. "
+                    "Run scan_once again to verify recognition."
+                ),
+            )
+
         template_path = self.template_dir / f"digit_{digit}_{safe_source}_{stamp}_{digest}.png"
         preview_path = self.preview_dir / f"digit_{digit}_{safe_source}_{stamp}_{digest}_preview.png"
 

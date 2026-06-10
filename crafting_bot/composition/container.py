@@ -17,6 +17,7 @@ from crafting_bot.services.level_scanner import LevelScanner
 from crafting_bot.services.rebuild_loop_runner import RebuildLoopRunner
 from crafting_bot.services.reincarnation_runner import ReincarnationRunner
 from crafting_bot.services.recovery_runner import RecoveryRunner
+from crafting_bot.services.reward_selection_service import RewardSelectionService
 from crafting_bot.services.screen_classifier import ScreenClassifier
 from crafting_bot.services.screen_verifier import ScreenVerifier
 from crafting_bot.services.screen_waiter import ScreenWaiter
@@ -133,6 +134,14 @@ class BotContainer:
             latest_screenshot_path=paths.LATEST_SCREENSHOT_PATH,
         )
 
+    def build_reward_selection_service(self) -> RewardSelectionService:
+        return RewardSelectionService(
+            adb=self.build_adb_client(),
+            calibration=self.build_calibration_store(),
+            search_targets=self.build_search_target_service(),
+            latest_screenshot_path=paths.LATEST_SCREENSHOT_PATH,
+        )
+
     def build_cycle_runner(self) -> CycleRunner:
         calibration = self.build_calibration_store()
         search_targets = self.build_search_target_service()
@@ -156,6 +165,7 @@ class BotContainer:
             waiter=waiter,
             target_status=TargetStatusService(calibration),
             latest_screenshot_path=paths.LATEST_SCREENSHOT_PATH,
+            reward_selector=self.build_reward_selection_service(),
         )
 
     def build_hire_runner(self) -> HireRunner:
