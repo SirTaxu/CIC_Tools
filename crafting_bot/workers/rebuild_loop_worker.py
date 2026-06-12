@@ -20,6 +20,7 @@ class LoopGuiStatus:
     same_level_seconds: float = 0.0
     last_action: str = "-"
     message: str = ""
+    notification: str = ""
 
 
 class RebuildLoopWorker:
@@ -31,7 +32,7 @@ class RebuildLoopWorker:
     """
 
     # Safety cap for GUI rebuild-cycle counting. The visible stop condition should
-    # normally be desired_level, reincarnation mode, or manual Stop.
+    # normally be manual Stop, reincarnation mode, or a failure.
     _GUI_MAX_REBUILD_CYCLES = 10000
 
     # Used when the optional GUI iteration safety is disabled. This is kept as a
@@ -43,7 +44,7 @@ class RebuildLoopWorker:
         self,
         event_queue: queue.Queue[LoopGuiStatus],
         *,
-        desired_level: int,
+        desired_level: int | None,
         reincarnation_enabled: bool,
         stuck_seconds: float,
         scan_interval_seconds: float,
@@ -55,7 +56,7 @@ class RebuildLoopWorker:
         max_iterations: int = 500,
     ) -> None:
         self.event_queue = event_queue
-        self.desired_level = max(1, int(desired_level))
+        self.desired_level = max(1, int(desired_level)) if desired_level is not None else None
         self.reincarnation_enabled = bool(reincarnation_enabled)
         self.stuck_seconds = max(1.0, float(stuck_seconds))
         self.scan_interval_seconds = max(0.10, float(scan_interval_seconds))
@@ -81,6 +82,12 @@ class RebuildLoopWorker:
         self._cycles_completed = 0
         self._reincarnations_completed = 0
         self._hire_setups_completed = 0
+
+        if self.reincarnation_enabled and self.desired_level is not None:
+            target_message = f"target level {self.desired_level}"
+        else:
+            target_message = "no reincarnation target"
+
         self._emit(
             LoopGuiStatus(
                 running=True,
@@ -88,9 +95,11 @@ class RebuildLoopWorker:
                 cycles="0",
                 last_action="start",
                 message=(
-                    f"Starting rebuild loop toward level {self.desired_level}. "
+                    f"Starting rebuild loop with {target_message}. "
                     f"Reincarnation={'on' if self.reincarnation_enabled else 'off'}, "
-                    f"hire setup={'on' if self.hire_enabled else 'off'} at level {self.hire_setup_level}, "
+                    f"hire setup={'on' if self.hire_enabled else 'off'}"
+                    f"{f' at exact level {self.hire_setup_level}' if self.hire_enabled else ''}, "
+                    f"auto-train={'on' if self.auto_train_missing_digits else 'off'}, "
                     f"iteration safety={'on' if self.max_iterations_enabled else 'off'}"
                     f"{f' ({self.max_iterations})' if self.max_iterations_enabled else ''}."
                 ),
@@ -122,10 +131,12 @@ class RebuildLoopWorker:
                 else self._GUI_UNLIMITED_MAX_ITERATIONS
             )
 
+            effective_desired_level = self.desired_level if self.reincarnation_enabled else None
+
             settings = RebuildLoopSettings(
                 mode="click",
                 max_cycles=self._GUI_MAX_REBUILD_CYCLES,
-                desired_level=self.desired_level,
+                desired_level=effective_desired_level,
                 reincarnation_enabled=self.reincarnation_enabled,
                 stuck_seconds=self.stuck_seconds,
                 scan_interval_seconds=self.scan_interval_seconds,
@@ -143,13 +154,18 @@ class RebuildLoopWorker:
             )
             self._emit_final(result)
         except Exception as exc:
+            message = f"Loop failed: {exc}"
             self._emit(
                 LoopGuiStatus(
                     running=False,
                     screen="ERROR",
                     cycles=str(self._cycles_completed),
                     last_action="error",
-                    message=f"Loop failed: {exc}",
+                    message=message,
+                    notification=(
+                        "The bot stopped because an unexpected error happened before the loop could continue.\n\n"
+                        f"Details:\n{exc}"
+                    ),
                 )
             )
         finally:
@@ -210,17 +226,88 @@ class RebuildLoopWorker:
                 cycles=f"{result.cycles_completed} rebuilds, {self._hire_setups_completed} hire setups, {self._reincarnations_completed} reincarnations",
                 last_action=result.stopped_reason,
                 message=result.message,
+                notification=self._notification_for_stop(result),
             )
         )
 
     @staticmethod
     def _cycle_success(iteration: LoopIterationResult) -> bool:
+        if "Treating the rebuild as completed and continuing." in iteration.message:
+            return True
+
         result = iteration.cycle_result
         if result is None or result.cycle is None or not result.eligible:
             return False
         if not result.steps:
             return False
-        return all(step.outcome in {"success", "planned"} for step in result.steps)
+        return all(step.outcome in {"success", "planned", "skipped"} for step in result.steps)
+
+    def _notification_for_stop(self, result: LoopRunResult) -> str:
+        reason = result.stopped_reason
+
+        if reason in {"stop_requested", "dry_run_planned_one_cycle"}:
+            return ""
+
+        if reason == "max_iterations_reached":
+            return (
+                "The bot stopped because the max loop iteration safety limit was reached.\n\n"
+                "This is usually not a crash. Increase the limit or turn off the iteration safety if you expected the bot to keep running."
+            )
+
+        if reason == "scan_failed":
+            return (
+                "The bot stopped because it could not reliably read the game screen.\n\n"
+                "Check that BlueStacks is open, the game is visible, and the level area is not covered. "
+                "The latest screenshot and crops are in the logs folder."
+            )
+
+        if reason == "cycle_failed":
+            return (
+                "The bot stopped during a rebuild cycle because one of the expected screens did not appear after a click.\n\n"
+                "This usually means the game was on an unexpected screen, a click missed, or a calibration target needs to be checked."
+            )
+
+        if reason == "hire_failed":
+            return (
+                "The bot stopped during the hire/setup cycle.\n\n"
+                "It did not continue because the bag/anvil navigation or one of the hire drag steps did not confirm correctly."
+            )
+
+        if reason == "reincarnation_failed":
+            return (
+                "The bot stopped during the reincarnation cycle.\n\n"
+                "It did not continue because one of the Headquarters/Dynasty/Reincarnate screens did not confirm correctly."
+            )
+
+        if reason == "reincarnation_boundary_unknown_level":
+            return (
+                "The bot stopped near the reincarnation boundary because it could not prove the current level.\n\n"
+                "This protects the digit templates from being trained with the wrong level number. Check the visible level and train/scan manually."
+            )
+
+        if reason == "repeated_auto_digit_training_candidate":
+            return (
+                "The bot stopped because auto-training saw the same failed digit crop again.\n\n"
+                "This prevents creating many duplicate templates. Check the latest level crop and train the visible level manually if needed."
+            )
+
+        if reason == "max_cycles_reached":
+            return (
+                "The bot stopped because it reached the internal rebuild-cycle safety cap.\n\n"
+                "This is unusual for the GUI. Restart the loop if you intentionally wanted it to continue longer."
+            )
+
+        if reason == "max_runtime_reached":
+            return "The bot stopped because the configured maximum runtime was reached."
+
+        if reason.endswith("_missing") or reason.endswith("_error") or "failed" in reason:
+            return (
+                "The bot stopped because it hit a protected failure condition.\n\n"
+                f"Reason: {reason}\n\n"
+                f"Technical message:\n{result.message}"
+            )
+
+        return ""
 
     def _emit(self, status: LoopGuiStatus) -> None:
         self.event_queue.put(status)

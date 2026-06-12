@@ -391,14 +391,20 @@ class RecoveryRunner:
 
     def _choose_free_point(self, before: ScreenClassificationResult, current_level: int | None) -> str:
         matched = before.matched_target or ""
+
+        if "early_free_button_alt" in matched and self.calibration.has_point("early_free_button_alt"):
+            return "early_free_button_alt"
+        if "free_button_alt" in matched and self.calibration.has_point("free_button_alt"):
+            return "free_button_alt"
+
         if current_level == 1 and self.calibration.has_point("early_free_button"):
             return "early_free_button"
         if "early_free" in matched and self.calibration.has_point("early_free_button"):
             return "early_free_button"
-        if "free_button_alt" in matched and self.calibration.has_point("free_button_alt"):
-            return "free_button_alt"
         if self.calibration.has_point("free_button"):
             return "free_button"
+        if self.calibration.has_point("free_button_alt"):
+            return "free_button_alt"
         return "early_free_button"
 
     def _latest_screenshot_hash(self) -> str:

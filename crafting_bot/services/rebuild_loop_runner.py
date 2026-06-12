@@ -14,9 +14,11 @@ from crafting_bot.services.auto_digit_training_service import (
     AutoDigitTrainingService,
     build_default_auto_digit_training_service,
 )
+from crafting_bot.services.cycle_outcome_confirmer import CycleOutcomeConfirmer
 from crafting_bot.services.cycle_runner import CycleRunner
 from crafting_bot.services.expected_level_scanner import ExpectedLevelScanner
 from crafting_bot.services.hire_runner import HireRunner
+from crafting_bot.services.level_continuity_guard import LevelContinuityGuard
 from crafting_bot.services.level_scanner import LevelScanner
 from crafting_bot.services.reincarnation_runner import ReincarnationRunner
 from crafting_bot.services.recovery_runner import RecoveryRunner
@@ -51,6 +53,8 @@ class RebuildLoopRunner:
         reincarnation_runner: ReincarnationRunner | None = None,
         hire_runner: HireRunner | None = None,
         recovery_runner: RecoveryRunner | None = None,
+        cycle_outcome_confirmer: CycleOutcomeConfirmer | None = None,
+        level_continuity_guard: LevelContinuityGuard | None = None,
     ) -> None:
         self.scanner = scanner
         self.expected_scanner = expected_scanner
@@ -59,6 +63,8 @@ class RebuildLoopRunner:
         self.reincarnation_runner = reincarnation_runner
         self.hire_runner = hire_runner
         self.recovery_runner = recovery_runner
+        self.cycle_outcome_confirmer = cycle_outcome_confirmer or CycleOutcomeConfirmer(scanner)
+        self.level_continuity_guard = level_continuity_guard or LevelContinuityGuard()
 
     def run(
         self,
@@ -102,6 +108,7 @@ class RebuildLoopRunner:
         iterations: list[LoopIterationResult] = []
         cycles_completed = 0
         last_level: int | None = None
+        trusted_level: int | None = None
         same_level_started = started
         stopped_reason = "max_cycles_reached"
         confirmed_levels: list[int] = []
@@ -128,6 +135,17 @@ class RebuildLoopRunner:
             expected_level = self._expected_current_level(cycle_start_levels)
             scan = self._scan_with_tracking(expected_level)
             now = time.monotonic()
+
+            continuity_decision = self.level_continuity_guard.evaluate(
+                scan,
+                trusted_level=trusted_level,
+                expected_level=expected_level,
+            )
+            continuity_note = ""
+            raw_scan_level_for_trust = scan.level if scan.ok else None
+            if continuity_decision.quarantined:
+                scan = self.level_continuity_guard.apply_effective_scan(scan, continuity_decision)
+                continuity_note = " " + continuity_decision.message
 
             if (
                 scan.ok
@@ -200,6 +218,10 @@ class RebuildLoopRunner:
                         candidate,
                         ask=assist_digit_training and not auto_train_missing_digits,
                     )
+                    reload_message = ""
+                    if training_result is not None and training_result.ok:
+                        reload_message = self._reload_digit_templates_after_training()
+
                     iteration = LoopIterationResult(
                         index=index,
                         action="wait" if training_result and training_result.ok else "failed",
@@ -207,13 +229,18 @@ class RebuildLoopRunner:
                         same_level_seconds=0.0,
                         trigger_reason="auto_digit_training",
                         cycle_result=None,
-                        message=self._format_auto_train_iteration_message(candidate, training_result),
+                        message=(
+                            self._format_auto_train_iteration_message(candidate, training_result)
+                            + reload_message
+                        ),
                     )
                     self._record_iteration(iterations, iteration, on_iteration)
                     if training_result is not None and training_result.ok:
-                        # Use the saved failed crop for training, then do a fresh
-                        # scan on the next iteration. This avoids acting on a
-                        # stale scan result and keeps the loop's decision path simple.
+                        # Use the saved failed crop for training, reload digit
+                        # templates in the live scanners, then do a fresh scan on
+                        # the next iteration. This avoids acting on a stale scan
+                        # result and ensures the loop can immediately use the
+                        # newly saved templates without requiring a GUI restart.
                         if self._sleep_interruptible(scan_interval_seconds, stop_event):
                             stopped_reason = "stop_requested"
                             break
@@ -226,8 +253,13 @@ class RebuildLoopRunner:
                         break
                     continue
 
-            if scan.ok and scan.level is not None:
-                self._remember_confirmed_level(confirmed_levels, scan.level)
+            if (
+                scan.ok
+                and raw_scan_level_for_trust is not None
+                and continuity_decision.accepted
+            ):
+                trusted_level = int(raw_scan_level_for_trust)
+                self._remember_confirmed_level(confirmed_levels, trusted_level)
 
             if scan.ok and scan.level is None:
                 iteration = LoopIterationResult(
@@ -257,6 +289,7 @@ class RebuildLoopRunner:
                 )
                 if recovered:
                     self._reset_tracking_after_recovery(confirmed_levels, cycle_start_levels)
+                    trusted_level = None
                     last_level = None
                     same_level_started = time.monotonic()
                     if self._sleep_interruptible(scan_interval_seconds, stop_event):
@@ -295,6 +328,7 @@ class RebuildLoopRunner:
                 )
                 if recovered:
                     self._reset_tracking_after_recovery(confirmed_levels, cycle_start_levels)
+                    trusted_level = None
                     last_level = None
                     same_level_started = time.monotonic()
                     if self._sleep_interruptible(scan_interval_seconds, stop_event):
@@ -388,6 +422,7 @@ class RebuildLoopRunner:
 
                         confirmed_levels.clear()
                         cycle_start_levels.clear()
+                        trusted_level = None
                         hire_done_this_climb = False
                         last_level = None
                         same_level_started = time.monotonic()
@@ -395,22 +430,7 @@ class RebuildLoopRunner:
                             stopped_reason = "stop_requested"
                             break
                         continue
-                elif scan.level >= desired_level:
-                    iteration = LoopIterationResult(
-                        index=index,
-                        action="stop",
-                        scan=scan,
-                        same_level_seconds=same_level_seconds,
-                        trigger_reason="desired_level_reached",
-                        cycle_result=None,
-                        message=f"Desired level reached: level={scan.level}, desired_level={desired_level}.",
-                    )
-                    self._record_iteration(iterations, iteration, on_iteration)
-                    stopped_reason = "desired_level_reached"
-                    break
-
-
-            if hire_enabled and not hire_done_this_climb and scan.level is not None and scan.level >= hire_setup_level:
+            if hire_enabled and not hire_done_this_climb and scan.level is not None and scan.level == hire_setup_level:
                 if self.hire_runner is None:
                     iteration = LoopIterationResult(
                         index=index,
@@ -526,6 +546,7 @@ class RebuildLoopRunner:
                     message=(
                         f"Waiting: level={scan.level_text}, ready={scan.ready}, "
                         f"same_level_seconds={same_level_seconds:.1f}/{stuck_seconds:.1f}."
+                        f"{continuity_note}"
                     ),
                 )
                 self._record_iteration(iterations, iteration, on_iteration)
@@ -549,51 +570,153 @@ class RebuildLoopRunner:
             )
             if self._stop_requested(stop_event):
                 stopped_reason = "stop_requested"
-            success = self._cycle_result_is_success(cycle_result)
+                iteration = LoopIterationResult(
+                    index=index,
+                    action="stop_requested",
+                    scan=scan,
+                    same_level_seconds=same_level_seconds,
+                    trigger_reason=trigger_reason,
+                    cycle_result=cycle_result,
+                    message=(
+                        "Stop requested during or immediately after cycle execution. "
+                        "Skipping post-cycle confirmation and failure handling."
+                    ),
+                )
+                self._record_iteration(iterations, iteration, on_iteration)
+                break
+
+            raw_cycle_success = self._cycle_result_is_success(cycle_result)
+            success = raw_cycle_success
+            timeout_failure_confirmed_same_level = False
+            ready_failure_confirmed_no_progress = False
+            ready_failure_confirmed_advanced = False
+            timeout_failure_message = ""
+            ready_failure_message = ""
             tracking_advanced = False
             tracking_message = "expected-level tracking unchanged"
-            if success:
-                cycles_completed += 1
-                if cycle_start_level is not None:
-                    if trigger_reason == "ready_star_detected":
+
+            post_cycle_confirmed_advanced = False
+            post_cycle_confirmed_no_progress = False
+            post_cycle_message = "expected-level tracking unchanged"
+
+            if mode == "click":
+                confirmation = self.cycle_outcome_confirmer.confirm(
+                    cycle_start_level=cycle_start_level,
+                    trigger_reason=trigger_reason,
+                    min_digit_score=min_digit_score_for_click,
+                    allow_low_confidence_level=allow_low_confidence_level,
+                )
+                post_cycle_message = confirmation.message
+
+                if self._stop_requested(stop_event):
+                    stopped_reason = "stop_requested"
+                    iteration = LoopIterationResult(
+                        index=index,
+                        action="stop_requested",
+                        scan=scan,
+                        same_level_seconds=same_level_seconds,
+                        trigger_reason=trigger_reason,
+                        cycle_result=cycle_result,
+                        message=(
+                            "Stop requested during post-cycle confirmation. "
+                            "Ignoring confirmation failure and stopping cleanly."
+                        ),
+                    )
+                    self._record_iteration(iterations, iteration, on_iteration)
+                    break
+
+                if confirmation.advanced:
+                    success = True
+                    post_cycle_confirmed_advanced = True
+                    cycles_completed += 1
+                    if cycle_start_level is not None:
+                        self._remember_confirmed_level(cycle_start_levels, cycle_start_level)
+                    trusted_level = confirmation.expected_next_level
+                    tracking_advanced = True
+                    tracking_message = post_cycle_message
+                    last_level = None
+                    same_level_started = time.monotonic()
+
+                elif confirmation.same_level:
+                    # Safe no-progress outcome. This covers high-level timeout
+                    # attempts that need several passes and false-ready clicks
+                    # that returned to the same readable level. Do not count a
+                    # rebuild and do not advance expected-level tracking.
+                    success = False
+                    post_cycle_confirmed_no_progress = True
+                    tracking_message = post_cycle_message
+                    trusted_level = confirmation.start_level
+                    last_level = None
+                    same_level_started = time.monotonic()
+
+                else:
+                    success = False
+                    tracking_message = post_cycle_message
+
+            else:
+                # Dry-run cannot move the game, so keep the planned-cycle result
+                # and do not perform post-cycle confirmation scans.
+                if success:
+                    cycles_completed += 1
+                    if cycle_start_level is not None:
                         self._remember_confirmed_level(cycle_start_levels, cycle_start_level)
                         tracking_advanced = True
                         tracking_message = (
-                            f"Ready-triggered cycle: level {cycle_start_level} is treated as completed; "
-                            f"next expected level is {cycle_start_level + 1}."
+                            f"Dry-run planned cycle for level {cycle_start_level}; "
+                            f"next expected level would be {cycle_start_level + 1}."
                         )
-                    elif trigger_reason == "same_level_timeout":
-                        transition = self._infer_timeout_cycle_transition(
-                            cycle_start_level=cycle_start_level,
-                            max_template_score=auto_train_ready_template_max_score,
-                        )
-                        tracking_message = transition
-                        if transition.startswith("Timeout-triggered cycle advanced"):
-                            self._remember_confirmed_level(cycle_start_levels, cycle_start_level)
-                            tracking_advanced = True
-                # Force a fresh same-level baseline after the cycle. The next scan
-                # will either see the new level or start timing the current one.
                 last_level = None
                 same_level_started = time.monotonic()
 
+            nonfatal_no_progress = post_cycle_confirmed_no_progress
+            iteration_action = "cycle" if success or nonfatal_no_progress else "failed"
+            iteration_trigger = trigger_reason
+            if post_cycle_confirmed_no_progress:
+                iteration_trigger = f"{trigger_reason}_confirmed_no_progress"
+            elif post_cycle_confirmed_advanced:
+                iteration_trigger = f"{trigger_reason}_confirmed_advanced"
+
+            cycle_state_text = (
+                "completed"
+                if success
+                else "did not advance safely"
+                if nonfatal_no_progress
+                else "failed"
+            )
+
             iteration = LoopIterationResult(
                 index=index,
-                action="cycle" if success else "failed",
+                action=iteration_action,
                 scan=scan,
                 same_level_seconds=same_level_seconds,
-                trigger_reason=trigger_reason,
+                trigger_reason=iteration_trigger,
                 cycle_result=cycle_result,
                 message=(
-                    f"Cycle {'completed' if success else 'failed'}: trigger={trigger_reason}, "
+                    f"Cycle {cycle_state_text}: trigger={trigger_reason}, "
                     f"cycles_completed={cycles_completed}/{max_cycles}. "
                     f"expected_level_tracking_advanced={'yes' if tracking_advanced else 'no'}. "
-                    f"{tracking_message}"
+                    f"{tracking_message}{continuity_note}"
                 ),
             )
             self._record_iteration(iterations, iteration, on_iteration)
 
             if stopped_reason == "stop_requested":
                 break
+
+            if not success and post_cycle_confirmed_no_progress:
+                if self._sleep_interruptible(scan_interval_seconds, stop_event):
+                    stopped_reason = "stop_requested"
+                    break
+                continue
+
+            if not raw_cycle_success and post_cycle_confirmed_advanced:
+                if mode == "dry_run":
+                    stopped_reason = "dry_run_planned_one_cycle"
+                    break
+                if self._sleep_interruptible(scan_interval_seconds, stop_event):
+                    stopped_reason = "stop_requested"
+                    break
+                continue
 
             if not success and stop_on_cycle_failure:
                 recovered = self._attempt_safe_recovery(
@@ -609,6 +732,7 @@ class RebuildLoopRunner:
                 )
                 if recovered:
                     self._reset_tracking_after_recovery(confirmed_levels, cycle_start_levels)
+                    trusted_level = None
                     last_level = None
                     same_level_started = time.monotonic()
                     if self._sleep_interruptible(scan_interval_seconds, stop_event):
@@ -642,11 +766,153 @@ class RebuildLoopRunner:
             message=(
                 f"Loop stopped: {stopped_reason}. "
                 f"cycles_completed={cycles_completed}/{max_cycles}, runtime={runtime:.1f}s."
-                + (f" desired_level={desired_level}." if desired_level is not None else "")
+                + (f" desired_level={desired_level}." if desired_level is not None and reincarnation_enabled else "")
                 + (" reincarnation_enabled=yes." if reincarnation_enabled else "")
                 + (f" hire_enabled=yes, hire_setup_level={hire_setup_level}." if hire_enabled else "")
             ),
         )
+
+
+    def _confirm_transition_after_ready_failure(
+        self,
+        *,
+        cycle_start_level: int | None,
+        min_digit_score: float,
+        allow_low_confidence_level: bool,
+    ) -> tuple[bool, bool, str]:
+        """Confirm what happened after a failed ready-triggered cycle.
+
+        At high levels, the cycle runner can mark a ready-triggered rebuild as
+        failed even though the game already returned to LEVEL_SCREEN and the
+        visible level advanced. This can happen when one verification step is
+        too strict or the final screen settles after the runner gives up.
+
+        Returns:
+            (advanced, no_progress, message)
+        """
+        if cycle_start_level is None:
+            return False, False, "Ready-triggered cycle failed and no start level was available to confirm."
+
+        next_level = cycle_start_level + 1
+        scans: list[LevelScanResult] = []
+        for _ in range(2):
+            scan = self.scanner.scan()
+            scans.append(scan)
+
+            if not scan.ok:
+                return False, False, f"Ready-triggered cycle failed; confirmation scan failed: {scan.message}"
+
+            if scan.screen != "LEVEL_SCREEN":
+                return False, False, (
+                    "Ready-triggered cycle failed; confirmation scan did not see LEVEL_SCREEN "
+                    f"(screen={scan.screen})."
+                )
+
+            if not allow_low_confidence_level and not self._digit_confidence_is_safe(scan.digit_score, min_digit_score):
+                return False, False, (
+                    "Ready-triggered cycle failed; level was read but digit confidence was too low "
+                    f"(read={scan.level_text}, score={scan.digit_score}, required>={min_digit_score:.3f})."
+                )
+
+            if scan.level not in {cycle_start_level, next_level}:
+                return False, False, (
+                    "Ready-triggered cycle failed; confirmation scan read an unexpected level "
+                    f"(start={cycle_start_level}, expected_next={next_level}, read={scan.level_text})."
+                )
+
+            time.sleep(0.10)
+
+        levels = [scan.level for scan in scans]
+        scores = ", ".join(str(scan.digit_score) for scan in scans)
+
+        if all(level == next_level for level in levels):
+            return (
+                True,
+                False,
+                (
+                    f"Ready-triggered cycle was marked failed, but two fresh scans confirmed "
+                    f"LEVEL_SCREEN at next level {next_level} with digit scores [{scores}]. "
+                    "Treating the rebuild as completed and continuing."
+                ),
+            )
+
+        if all(level == cycle_start_level for level in levels):
+            return (
+                False,
+                True,
+                (
+                    f"Ready-triggered cycle was marked failed, but two fresh scans confirmed "
+                    f"LEVEL_SCREEN still at level {cycle_start_level} with digit scores [{scores}]. "
+                    "Treating this as a non-fatal false-ready/no-progress attempt and continuing."
+                ),
+            )
+
+        return (
+            False,
+            False,
+            (
+                "Ready-triggered cycle failed; confirmation scans were not stable "
+                f"(levels={levels}, start={cycle_start_level}, expected_next={next_level})."
+            ),
+        )
+
+
+    def _confirm_same_level_after_timeout_failure(
+        self,
+        *,
+        cycle_start_level: int | None,
+        min_digit_score: float,
+        allow_low_confidence_level: bool,
+    ) -> tuple[bool, str]:
+        """Decide whether a failed timeout-triggered cycle is safe to ignore.
+
+        On high levels, the same level can need several timeout rebuild attempts
+        before it actually advances. A failed timeout attempt is only non-fatal
+        if fresh scans prove that the bot is still on LEVEL_SCREEN and the same
+        level number is being read with acceptable digit confidence.
+
+        This avoids a hard "two cycle" limit while still stopping/recovering if
+        the bot is on an unexpected screen or the level read is not trustworthy.
+        """
+        if cycle_start_level is None:
+            return False, "Timeout-triggered cycle failed and no start level was available to confirm."
+
+        scans: list[LevelScanResult] = []
+        for _ in range(2):
+            scan = self.scanner.scan()
+            scans.append(scan)
+            if not scan.ok:
+                return False, f"Timeout-triggered cycle failed; confirmation scan failed: {scan.message}"
+            if scan.screen != "LEVEL_SCREEN":
+                return False, (
+                    "Timeout-triggered cycle failed; confirmation scan did not see LEVEL_SCREEN "
+                    f"(screen={scan.screen})."
+                )
+            if scan.level != cycle_start_level:
+                return False, (
+                    "Timeout-triggered cycle failed; confirmation scan did not read the same level "
+                    f"(expected={cycle_start_level}, read={scan.level_text})."
+                )
+            if not allow_low_confidence_level and not self._digit_confidence_is_safe(scan.digit_score, min_digit_score):
+                return False, (
+                    "Timeout-triggered cycle failed; same level was read but digit confidence was too low "
+                    f"(score={scan.digit_score}, required>={min_digit_score:.3f})."
+                )
+            time.sleep(0.10)
+
+        scores = ", ".join(str(scan.digit_score) for scan in scans)
+        return (
+            True,
+            (
+                f"Timeout-triggered cycle failed but two fresh scans confirmed LEVEL_SCREEN at level "
+                f"{cycle_start_level} with digit scores [{scores}]. Treating this as a non-fatal "
+                "no-progress timeout attempt and continuing."
+            ),
+        )
+
+    @staticmethod
+    def _digit_confidence_is_safe(score: float | None, minimum: float) -> bool:
+        return score is not None and float(score) >= float(minimum)
 
 
     @staticmethod
@@ -897,6 +1163,46 @@ class RebuildLoopRunner:
             template_score=scan.ready_score,
             previous_levels=previous_two,
         )
+
+    def _reload_digit_templates_after_training(self) -> str:
+        """Reload digit readers after loop auto-training saves new templates.
+
+        The scanners keep DigitReader instances in memory. Without reloading,
+        the next scan can still use the old template list, see the same crop as
+        unreadable, and trip the duplicate-training guard even though training
+        successfully wrote good templates to disk.
+        """
+        reloaded: list[str] = []
+        failed: list[str] = []
+
+        scanner_pairs = [
+            ("scanner", self.scanner),
+            ("expected_scanner", self.expected_scanner),
+        ]
+
+        for name, scanner in scanner_pairs:
+            if scanner is None:
+                continue
+
+            digit_reader = getattr(scanner, "digit_reader", None)
+            load = getattr(digit_reader, "load", None)
+            if not callable(load):
+                continue
+
+            try:
+                load()
+                reloaded.append(name)
+            except Exception as exc:
+                failed.append(f"{name}: {exc}")
+
+        if failed:
+            return " Digit template reload failed for " + "; ".join(failed) + "."
+
+        if reloaded:
+            return " Reloaded digit templates for " + ", ".join(reloaded) + "."
+
+        return " No live digit readers were available to reload."
+
 
     def _maybe_train_missing_digits(
         self,

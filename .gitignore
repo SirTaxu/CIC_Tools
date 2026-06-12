@@ -15,10 +15,14 @@ env/
 # Runtime logs and screenshots
 logs/
 *.log
+*.stop_aware_backup
 
 # Calibration backups generated while editing targets
 data/calibration/backups/
 data/calibration/adb_bot_config.backup_*.json
+data/template_index_backups/
+data/template_cleanup_backup/
+data/template_quarantine/
 
 # Temporary/debug files
 tmp/

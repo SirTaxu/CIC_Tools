@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,7 +40,7 @@ class DigitReader:
         template_dir: Path,
         min_score: float = 0.50,
         min_margin: float = 0.07,
-        max_supported_level: int = 100,
+        max_supported_level: int = 999,
     ) -> None:
         self.template_dir = template_dir
         self.min_score = min_score
@@ -53,7 +54,7 @@ class DigitReader:
             raise FileNotFoundError(f"Missing digit template directory: {self.template_dir}")
 
         templates: list[DigitTemplate] = []
-        for path in sorted(self.template_dir.glob("digit_*.png")):
+        for path in self._template_paths():
             match = _DIGIT_NAME_PATTERN.search(path.name)
             if not match:
                 continue
@@ -77,6 +78,62 @@ class DigitReader:
             raise ValueError(f"No digit templates found in {self.template_dir}")
 
         self._templates = templates
+
+
+    def _template_paths(self) -> list[Path]:
+        """Return active digit template paths, using index.json when present.
+
+        The index is optional and forward-compatible with a future Template
+        Manager. Enabled entries are loaded first, then any PNG not yet listed
+        in the index is added by filename so manual file additions still work.
+        """
+        indexed_paths: list[Path] = []
+        indexed_names: set[str] = set()
+        index_path = self.template_dir / "index.json"
+
+        if index_path.exists():
+            try:
+                with index_path.open("r", encoding="utf-8") as handle:
+                    raw = json.load(handle)
+            except Exception:
+                raw = None
+
+            items: object
+            if isinstance(raw, dict):
+                items = raw.get("templates", raw.get("entries", raw))
+            else:
+                items = raw
+
+            if isinstance(items, dict):
+                iterable = items.values()
+            elif isinstance(items, list):
+                iterable = items
+            else:
+                iterable = []
+
+            for item in iterable:
+                if not isinstance(item, dict):
+                    continue
+                if not item.get("enabled", True):
+                    continue
+                filename = item.get("filename") or item.get("file") or item.get("path") or item.get("template_path")
+                if not filename:
+                    continue
+                path = self.template_dir / Path(str(filename)).name
+                if path.exists() and _DIGIT_NAME_PATTERN.search(path.name):
+                    indexed_paths.append(path)
+                    indexed_names.add(path.name)
+
+        filename_paths = [
+            path
+            for path in sorted(self.template_dir.glob("digit_*.png"))
+            if path.name not in indexed_names
+        ]
+
+        unique: dict[Path, Path] = {}
+        for path in [*indexed_paths, *filename_paths]:
+            unique.setdefault(path.resolve(), path)
+        return sorted(unique.values(), key=lambda item: item.name)
 
     def read(self, crop: Image.Image, allowed_digits: set[str] | None = None) -> tuple[str, list[DigitMatch]]:
         if not self._templates:

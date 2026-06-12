@@ -59,6 +59,7 @@ class ScreenClassifier:
         ScreenCheck("TAKE_REWARD_SCREEN", "early_reward_button_check_area", source="legacy"),
         ScreenCheck("FREE_SCREEN", "free_button_check_area", source="legacy"),
         ScreenCheck("FREE_SCREEN", "early_free_button_check_area", source="legacy"),
+        ScreenCheck("FREE_SCREEN", "early_free_button_alt_check_area", source="legacy"),
         ScreenCheck("FREE_SCREEN", "free_button_alt_check_area", source="legacy"),
         ScreenCheck("HEADQUARTERS_SCREEN", "dynasty_button_check_area", source="legacy"),
         ScreenCheck("DYNASTY_SCREEN", "reincarnate_button_check_area", source="legacy"),
@@ -83,7 +84,7 @@ class ScreenClassifier:
         ("DYNASTY_SCREEN", ("reincarnate_button_check_area",)),
         ("HEADQUARTERS_SCREEN", ("dynasty_button_check_area",)),
         ("TAKE_REWARD_SCREEN", ("reward_button_check_area", "early_reward_button_check_area")),
-        ("FREE_SCREEN", ("free_button_check_area", "early_free_button_check_area", "free_button_alt_check_area")),
+        ("FREE_SCREEN", ("free_button_check_area", "early_free_button_check_area", "early_free_button_alt_check_area", "free_button_alt_check_area")),
     )
 
     def __init__(

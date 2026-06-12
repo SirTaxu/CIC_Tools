@@ -16,6 +16,7 @@ def main() -> int:
     print(f"ready_template: {result.ready_template}")
     print(f"digit_score: {result.digit_score}")
     print(f"digit_diagnostics: {result.digit_diagnostics}")
+    print(f"ready_diagnostics: {result.ready_diagnostics}")
     print(f"level_crop_path: {result.level_crop_path}")
     print(f"message: {result.message}")
     return 0 if result.ok else 1

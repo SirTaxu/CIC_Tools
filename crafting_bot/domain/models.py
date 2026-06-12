@@ -57,3 +57,4 @@ class LevelScanResult:
     level_crop_path: Path | None
     message: str
     digit_diagnostics: str | None = None
+    ready_diagnostics: str | None = None

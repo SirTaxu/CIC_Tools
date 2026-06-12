@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PIL import Image
-
 from crafting_bot.domain.models import LevelScanResult
 from crafting_bot.domain.ports import ScreenCapture
 from crafting_bot.infra.calibration_store import CalibrationStore
@@ -13,17 +11,12 @@ from crafting_bot.vision.ready_detector import ReadyDetector
 
 
 class ExpectedLevelScanner:
-    """Scan the level badge while tracking a known expected level.
+    """Scan the level badge while using an expected level as context only.
 
-    The normal LevelScanner is intentionally broad: it can be used when the bot
-    does not yet know which level is visible. Once the loop has completed two
-    consecutive levels, the expected next level is known. This scanner restricts
-    ready/not-ready comparison to that expected level and restricts digit
-    matching to the digits that can appear in that expected level.
-
-    If the expected level's ready/not-ready marker is visible but the digits are
-    weak or unreadable, the result keeps level=None so the loop can train digit
-    templates from the saved crop before clicking.
+    The expected level is a hint, not proof. A normal broad digit read is always
+    attempted first because it is the safest source for the actual visible level.
+    A restricted expected-level read is used only when the broad read is unknown;
+    it must never override a readable broad result.
     """
 
     def __init__(
@@ -61,29 +54,51 @@ class ExpectedLevelScanner:
             level_crop.save(self.level_crop_path)
             save_preview(level_crop, self.level_preview_path)
 
+            broad_text, broad_matches = self.digit_reader.read(level_crop)
+            broad_level = int(broad_text) if broad_text.isdigit() else None
+            broad_diagnostics = self.digit_reader.diagnostics_for_last_read()
+
+            selected_text = broad_text
+            selected_level = broad_level
+            selected_matches = broad_matches
+            selected_source = "broad"
+            restricted_text: str | None = None
+            restricted_diagnostics: str | None = None
+
+            # Restricted reads are a fallback for unreadable crops only. If the
+            # broad read already produced a number, that number is the observed
+            # level even when it differs from the expected level.
+            if broad_level is None:
+                restricted_matches = []
+                restricted_text, restricted_matches = self.digit_reader.read(
+                    level_crop,
+                    allowed_digits=allowed_digits,
+                )
+                restricted_diagnostics = self.digit_reader.diagnostics_for_last_read()
+                restricted_level = int(restricted_text) if restricted_text.isdigit() else None
+
+                if restricted_level == expected_level:
+                    selected_text = restricted_text
+                    selected_level = restricted_level
+                    selected_matches = restricted_matches
+                    selected_source = "restricted_expected_fallback"
+
+            digit_score = min((match.score for match in selected_matches), default=None)
+            level_text = str(selected_level) if selected_level is not None else "unknown"
+
+            ready_level_hint = selected_level if selected_level is not None else expected_level
             ready_match = self.ready_detector.classify(
                 level_crop,
-                level_hint=expected_level,
-                require_level_templates=True,
+                level_hint=ready_level_hint,
+                require_level_templates=False,
             )
-
-            raw_level_text, digit_matches = self.digit_reader.read(level_crop, allowed_digits=allowed_digits)
-            raw_level = int(raw_level_text) if raw_level_text.isdigit() else None
-            digit_score = min((match.score for match in digit_matches), default=None)
-            digit_diagnostics = self.digit_reader.diagnostics_for_last_read()
-
-            if raw_level == expected_level:
-                level_text = expected_text
-                level = expected_level
-            else:
-                level_text = "unknown"
-                level = None
+            ready_diagnostics = self.ready_detector.diagnostics_for_last_match()
 
             return LevelScanResult(
                 ok=True,
                 screen="LEVEL_SCREEN",
                 level_text=level_text,
-                level=level,
+                level=selected_level,
                 ready=ready_match.state,
                 ready_score=ready_match.score,
                 ready_template=ready_match.template_path.name if ready_match.template_path else None,
@@ -91,14 +106,19 @@ class ExpectedLevelScanner:
                 level_crop_path=self.level_crop_path,
                 message=self._format_message(
                     expected_level=expected_level,
-                    raw_level_text=raw_level_text,
+                    broad_text=broad_text,
+                    restricted_text=restricted_text,
                     final_level_text=level_text,
+                    selected_source=selected_source,
                     ready=ready_match.state,
                     ready_score=ready_match.score,
                     digit_score=digit_score,
-                    digit_diagnostics=digit_diagnostics,
+                    broad_diagnostics=broad_diagnostics,
+                    restricted_diagnostics=restricted_diagnostics,
+                    ready_diagnostics=ready_diagnostics,
                 ),
-                digit_diagnostics=digit_diagnostics,
+                digit_diagnostics=broad_diagnostics if selected_source == "broad" else restricted_diagnostics,
+                ready_diagnostics=ready_diagnostics,
             )
 
         except Exception as exc:
@@ -114,28 +134,41 @@ class ExpectedLevelScanner:
                 level_crop_path=None,
                 message=f"Expected-level scan failed for level {expected_level}: {exc}",
                 digit_diagnostics=None,
+                ready_diagnostics=None,
             )
 
     @staticmethod
     def _format_message(
         *,
         expected_level: int,
-        raw_level_text: str,
+        broad_text: str,
+        restricted_text: str | None,
         final_level_text: str,
+        selected_source: str,
         ready: str,
         ready_score: float | None,
         digit_score: float | None,
-        digit_diagnostics: str | None,
+        broad_diagnostics: str | None,
+        restricted_diagnostics: str | None,
+        ready_diagnostics: str | None,
     ) -> str:
         ready_part = f"ready={ready}"
         if ready_score is not None:
             ready_part += f" score={ready_score:.3f}"
+        if ready_diagnostics:
+            ready_part += f" ({ready_diagnostics})"
 
         digit_part = "digit_score=none" if digit_score is None else f"digit_score={digit_score:.3f}"
-        if digit_diagnostics:
-            digit_part += f" ({digit_diagnostics})"
+        diagnostics = broad_diagnostics if selected_source == "broad" else restricted_diagnostics
+        if diagnostics:
+            digit_part += f" ({diagnostics})"
+
+        restricted_part = ""
+        if restricted_text is not None:
+            restricted_part = f", restricted_digits={restricted_text}"
 
         return (
-            f"Expected-level scan: expected={expected_level}, raw_digits={raw_level_text}, "
-            f"level={final_level_text}, {ready_part}, {digit_part}."
+            f"Expected-level scan: expected={expected_level}, broad_digits={broad_text}"
+            f"{restricted_part}, selected={selected_source}, level={final_level_text}, "
+            f"{ready_part}, {digit_part}."
         )

@@ -49,6 +49,7 @@ class CycleRunner:
         self.target_status = target_status
         self.latest_screenshot_path = latest_screenshot_path
         self.reward_selector = reward_selector
+        self._last_free_button_target = "free_button"
 
     def run_once(
         self,
@@ -64,6 +65,8 @@ class CycleRunner:
         allow_low_confidence_level: bool = False,
         stop_event: Any | None = None,
     ) -> CycleExecutionResult:
+        self._last_free_button_target = "free_button"
+
         scan = self.scanner.scan()
         effective_level = level_override if level_override is not None else scan.level
 
@@ -289,9 +292,10 @@ class CycleRunner:
         if self._stop_requested(stop_event):
             return self._stop_step_result(step, mode, "Stop requested before fixed-point step.")
 
-        point = self._safe_point(step.target_name)
+        actual_target_name = self._point_target_for_step(step.target_name)
+        point = self._safe_point(actual_target_name)
         if point is None:
-            return StepExecutionResult(step, "failed", mode, None, None, None, None, None, None, f"Missing point target: {step.target_name}")
+            return StepExecutionResult(step, "failed", mode, None, None, None, None, None, None, f"Missing point target: {actual_target_name}")
 
         x, y = point
         if mode == "click":
@@ -307,10 +311,18 @@ class CycleRunner:
             )
             if verification and verification.passed is False:
                 return StepExecutionResult(step, "failed", mode, x, y, None, None, verification, None, f"Clicked ({x}, {y}) but verification failed.")
-            return StepExecutionResult(step, "success", mode, x, y, None, None, verification, None, f"Clicked fixed point ({x}, {y}).")
+            message = f"Clicked fixed point ({x}, {y})."
+            if actual_target_name != step.target_name:
+                message += f" Used {actual_target_name} for detected free-screen variant."
+            if step.target_name == "free_button":
+                self._last_free_button_target = "free_button"
+            return StepExecutionResult(step, "success", mode, x, y, None, None, verification, None, message)
 
         verification = VerificationResult(step.verification_target, False, None, None, None, "Dry-run: verification not attempted.") if step.verification_target else None
-        return StepExecutionResult(step, "planned", mode, x, y, None, None, verification, None, f"Dry-run: would click fixed point ({x}, {y}).")
+        message = f"Dry-run: would click fixed point ({x}, {y})."
+        if actual_target_name != step.target_name:
+            message += f" Would use {actual_target_name} for detected free-screen variant."
+        return StepExecutionResult(step, "planned", mode, x, y, None, None, verification, None, message)
 
     def _run_search_target_step(
         self,
@@ -413,12 +425,235 @@ class CycleRunner:
             return self._stop_verification(step.verification_target, "Stop requested before verification wait.")
         if step_delay_seconds > 0 and self._sleep_interruptible(step_delay_seconds, stop_event):
             return self._stop_verification(step.verification_target, "Stop requested during post-click delay.")
+        if step.verification_target in {"free_button_check_area", "early_free_button_check_area"}:
+            return self._wait_for_free_screen_variant(
+                requested_target_name=step.verification_target,
+                timeout_seconds=wait_timeout_seconds,
+                poll_interval_seconds=poll_interval_seconds,
+                stop_event=stop_event,
+            )
+
         return self.waiter.wait_for_verification(
             step.verification_target,
             timeout_seconds=wait_timeout_seconds,
             poll_interval_seconds=poll_interval_seconds,
             stop_event=stop_event,
         )
+
+    def _wait_for_free_screen_variant(
+        self,
+        *,
+        requested_target_name: str,
+        timeout_seconds: float,
+        poll_interval_seconds: float,
+        stop_event: Any | None = None,
+    ) -> VerificationResult:
+        """Wait for either known Free-screen layout.
+
+        Normal level 1:
+            early_free_button_check_area -> early_free_button
+
+        Alternate level 1:
+            early_free_button_alt_check_area -> early_free_button_alt
+
+        Normal level 2+:
+            free_button_check_area -> free_button
+
+        Alternate level 2+:
+            free_button_alt_check_area -> free_button_alt
+
+        Whichever check area passes determines which point the later
+        "click free" step will tap.
+        """
+        import time
+
+        variants = self._free_screen_variants_for_verification(requested_target_name)
+        available = tuple(
+            (check_name, point_name)
+            for check_name, point_name in variants
+            if self.calibration.has_area(check_name) and self.calibration.has_point(point_name)
+        )
+        if not available:
+            return VerificationResult(
+                target_name=requested_target_name,
+                attempted=True,
+                passed=False,
+                score=None,
+                threshold=None,
+                message=(
+                    "No usable Free-screen variants are calibrated for this cycle phase. Expected one of the configured normal/alternate Free-screen pairs."
+                ),
+                preview_path=None,
+            )
+
+        timeout_seconds = max(0.0, float(timeout_seconds))
+        poll_interval_seconds = max(0.05, float(poll_interval_seconds))
+        required_passes = 2
+        minimum_wait_seconds = 0.90
+        consecutive: dict[str, int] = {check_name: 0 for check_name, _ in available}
+        last_result: VerificationResult | None = None
+        started = time.monotonic()
+        attempts = 0
+
+        if minimum_wait_seconds > 0:
+            if self._sleep_interruptible(min(minimum_wait_seconds, timeout_seconds), stop_event):
+                return self._stop_verification(
+                    requested_target_name,
+                    "Stop requested during Free-screen variant minimum wait.",
+                )
+
+        while True:
+            if self._stop_requested(stop_event):
+                return self._stop_verification(
+                    requested_target_name,
+                    "Stop requested during Free-screen variant polling.",
+                )
+
+            attempts += 1
+            screenshot = self.adb.capture()
+            self._save_latest_screenshot(screenshot)
+            elapsed = time.monotonic() - started
+
+            for check_name, point_name in available:
+                result = self.verifier.verify(check_name, screenshot=screenshot)
+                last_result = result
+                if result.passed is True:
+                    consecutive[check_name] += 1
+                else:
+                    consecutive[check_name] = 0
+
+                if result.passed is True and consecutive[check_name] >= required_passes:
+                    selected_point = point_name
+                    green_present, green_ratio = self._normal_free_check_has_green_headstart_ui(
+                        screenshot,
+                        check_name=check_name,
+                        point_name=point_name,
+                    )
+                    alt_point = self._alt_free_point_for_normal_point(point_name)
+                    used_green_guard = bool(green_present and alt_point and self.calibration.has_point(alt_point))
+                    if used_green_guard:
+                        selected_point = alt_point
+
+                    self._last_free_button_target = selected_point
+                    guard_message = ""
+                    if green_present:
+                        guard_message = (
+                            f" Green head-start UI guard detected green_ratio={green_ratio:.4f}; "
+                            f"using {selected_point}."
+                        )
+                    return VerificationResult(
+                        target_name=check_name,
+                        attempted=True,
+                        passed=True,
+                        score=result.score,
+                        threshold=result.threshold,
+                        message=(
+                            f"Verification passed for Free-screen variant {check_name}; "
+                            f"will click {selected_point}. attempts={attempts}, elapsed={elapsed:.2f}s, "
+                            f"stable_passes={consecutive[check_name]}/{required_passes}. "
+                            f"{result.message}{guard_message}"
+                        ),
+                        preview_path=result.preview_path,
+                    )
+
+            if elapsed >= timeout_seconds:
+                last_message = last_result.message if last_result is not None else "No variant check was attempted."
+                return VerificationResult(
+                    target_name=requested_target_name,
+                    attempted=True,
+                    passed=False,
+                    score=last_result.score if last_result is not None else None,
+                    threshold=last_result.threshold if last_result is not None else None,
+                    message=(
+                        "Timed out waiting for either Free-screen variant "
+                        f"({', '.join(name for name, _ in available)}). Last result: {last_message}"
+                    ),
+                    preview_path=last_result.preview_path if last_result is not None else None,
+                )
+
+            if self._sleep_interruptible(min(poll_interval_seconds, max(0.0, timeout_seconds - elapsed)), stop_event):
+                return self._stop_verification(
+                    requested_target_name,
+                    "Stop requested during Free-screen variant poll wait.",
+                )
+
+    def _normal_free_check_has_green_headstart_ui(
+        self,
+        screenshot: Image.Image,
+        *,
+        check_name: str,
+        point_name: str,
+    ) -> tuple[bool, float]:
+        """Detect the green head-start button inside a normal Free check area.
+
+        The alternate Rebuild-with-head-start Free screen can partially match the
+        normal Free check area because both layouts contain a blue Free button.
+        The reliable difference is the green head-start button visible lower in
+        the same normal check crop. If that green UI is present, use the alternate
+        Free click point even if the normal Free check passed.
+        """
+        if point_name not in {"free_button", "early_free_button"}:
+            return False, 0.0
+        if not self.calibration.has_area(check_name):
+            return False, 0.0
+
+        try:
+            area = self.calibration.get_area(check_name)
+            crop = screenshot.crop((area.x, area.y, area.x + area.width, area.y + area.height)).convert("RGB")
+            pixels = list(crop.getdata())
+            if not pixels:
+                return False, 0.0
+
+            green_pixels = 0
+            for red, green, blue in pixels:
+                if (
+                    green >= 120
+                    and green - red >= 35
+                    and green - blue >= 35
+                    and green >= red * 1.20
+                    and green >= blue * 1.10
+                ):
+                    green_pixels += 1
+
+            ratio = green_pixels / len(pixels)
+            return ratio >= 0.015 or green_pixels >= 100, ratio
+        except Exception:
+            return False, 0.0
+
+    @staticmethod
+    def _alt_free_point_for_normal_point(point_name: str) -> str | None:
+        if point_name == "free_button":
+            return "free_button_alt"
+        if point_name == "early_free_button":
+            return "early_free_button_alt"
+        return None
+
+
+    def _point_target_for_step(self, target_name: str) -> str:
+        if target_name in {"free_button", "early_free_button"}:
+            selected = self._last_free_button_target
+            if selected in {"free_button_alt", "early_free_button_alt"} and self.calibration.has_point(selected):
+                return selected
+        return target_name
+
+    @staticmethod
+    def _free_screen_variants_for_verification(requested_target_name: str) -> tuple[tuple[str, str], ...]:
+        # Prefer alternate checks first. The normal Free-screen check area can
+        # partially match the alternate Rebuild-with-head-start screen because
+        # both layouts contain a Free button. If the normal check is evaluated
+        # first, the cycle may verify the alternate screen but still click the
+        # normal free_button point. Checking the alternate marker first lets the
+        # variant-specific point win when that layout is present.
+        if requested_target_name == "early_free_button_check_area":
+            return (
+                ("early_free_button_alt_check_area", "early_free_button_alt"),
+                ("early_free_button_check_area", "early_free_button"),
+            )
+        return (
+            ("free_button_alt_check_area", "free_button_alt"),
+            ("free_button_check_area", "free_button"),
+        )
+
 
     @staticmethod
     def _stop_requested(stop_event: Any | None) -> bool:

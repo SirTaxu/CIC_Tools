@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from crafting_bot.app.bot_gui import BotGui
+from crafting_bot.cli.run_loop import main
 
 
 if __name__ == "__main__":
-    app = BotGui()
-    app.mainloop()
+    raise SystemExit(main())

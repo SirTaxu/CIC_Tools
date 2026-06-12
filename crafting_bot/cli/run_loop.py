@@ -1,21 +1,33 @@
 from __future__ import annotations
 
 import argparse
+import time
 
 from crafting_bot.application.settings import RebuildLoopSettings
-from crafting_bot.factory import build_bot_controller
+from crafting_bot.domain.bot_session import BotSessionStatus
+from crafting_bot.factory import build_bot_session_controller
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Run a small unattended rebuild loop. Dry-run by default.")
+SUCCESS_STOP_REASONS = {
+    "max_cycles_reached",
+    "dry_run_planned_one_cycle",
+    "stop_at_level_reached",
+    "desired_level_reached",
+    "stop_requested",
+    "max_runtime_reached",
+}
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run the CIC bot headlessly. Dry-run by default.")
     parser.add_argument("--click", action="store_true", help="Actually send ADB taps. Omit this for dry-run mode.")
     parser.add_argument("--max-cycles", type=int, default=3, help="Safety cap on successful rebuild cycles before stopping.")
-    parser.add_argument("--desired-level", type=int, default=None, help="Visible level to stop at, or completed level before reincarnation when --reincarnate is used.")
+    parser.add_argument("--desired-level", type=int, default=None, help="Completed level before reincarnation when --reincarnate is used. Ignored unless --reincarnate is set.")
     parser.add_argument("--reincarnate", action="store_true", help="When --desired-level is set, reincarnate after completing that level and continue looping.")
     parser.add_argument("--hire", action="store_true", help="Run the hire/setup cycle once per climb after the setup level is reached.")
-    parser.add_argument("--hire-level", type=int, default=45, help="Visible level where the hire/setup cycle may run once per climb. Default: 45.")
+    parser.add_argument("--hire-level", type=int, default=45, help="Exact visible level where the hire/setup cycle may run once per climb. Default: 45.")
     parser.add_argument("--hire-drag-duration-ms", type=int, default=750, help="ADB swipe duration for hire/setup drags. Default: 750.")
-    parser.add_argument("--stuck-seconds", type=float, default=20.0, help="Force a rebuild if the same visible level remains this long.")
+    parser.add_argument("--stuck-seconds", type=float, default=20.0, help="Wait timer: force a rebuild if the same visible level remains this long.")
     parser.add_argument("--scan-interval", type=float, default=1.0, help="Seconds between scans while waiting.")
     parser.add_argument("--max-runtime", type=float, default=None, help="Optional maximum runtime in seconds.")
     parser.add_argument("--stop-at-level", type=int, default=None, help="Stop before cycling if the scanned level is at least this value.")
@@ -48,36 +60,93 @@ def main() -> int:
         default=0.16,
         help="Maximum ready-template score allowed for loop-assisted digit training. Lower is stricter. Default: 0.16.",
     )
-    args = parser.parse_args()
+    parser.add_argument("--quiet", action="store_true", help="Do not print live status lines while the bot is running.")
+    parser.add_argument("--summary-only", action="store_true", help="Do not print detailed iteration output after the run.")
+    return parser
 
+
+def settings_from_args(args: argparse.Namespace) -> RebuildLoopSettings:
     mode = "click" if args.click else "dry_run"
-    try:
-        controller = build_bot_controller()
-        settings = RebuildLoopSettings(
-            mode=mode,
-            max_cycles=args.max_cycles,
-            desired_level=args.desired_level,
-            reincarnation_enabled=args.reincarnate,
-            hire_enabled=args.hire,
-            hire_setup_level=args.hire_level,
-            hire_drag_duration_ms=args.hire_drag_duration_ms,
-            stuck_seconds=args.stuck_seconds,
-            scan_interval_seconds=args.scan_interval,
-            max_runtime_seconds=args.max_runtime,
-            stop_at_level=args.stop_at_level,
-            step_delay_seconds=args.step_delay,
-            wait_timeout_seconds=args.wait_timeout,
-            poll_interval_seconds=args.poll,
-            min_digit_score_for_click=args.min_digit_score,
-            allow_low_confidence_level=args.allow_low_confidence_level,
-            stop_on_scan_failure=not args.continue_on_scan_failure,
-            stop_on_cycle_failure=not args.continue_on_cycle_failure,
-            max_iterations=args.max_iterations,
-            assist_digit_training=args.assist_digit_training,
-            auto_train_missing_digits=args.auto_train_missing_digits,
-            auto_train_ready_template_max_score=args.auto_train_template_score,
+    return RebuildLoopSettings(
+        mode=mode,
+        max_cycles=args.max_cycles,
+        desired_level=args.desired_level,
+        reincarnation_enabled=args.reincarnate,
+        hire_enabled=args.hire,
+        hire_setup_level=args.hire_level,
+        hire_drag_duration_ms=args.hire_drag_duration_ms,
+        stuck_seconds=args.stuck_seconds,
+        scan_interval_seconds=args.scan_interval,
+        max_runtime_seconds=args.max_runtime,
+        stop_at_level=args.stop_at_level,
+        step_delay_seconds=args.step_delay,
+        wait_timeout_seconds=args.wait_timeout,
+        poll_interval_seconds=args.poll,
+        min_digit_score_for_click=args.min_digit_score,
+        allow_low_confidence_level=args.allow_low_confidence_level,
+        stop_on_scan_failure=not args.continue_on_scan_failure,
+        stop_on_cycle_failure=not args.continue_on_cycle_failure,
+        max_iterations=args.max_iterations,
+        assist_digit_training=args.assist_digit_training,
+        auto_train_missing_digits=args.auto_train_missing_digits,
+        auto_train_ready_template_max_score=args.auto_train_template_score,
+    )
+
+
+class LiveStatusPrinter:
+    """Small console status printer for headless runs."""
+
+    def __init__(self, *, enabled: bool = True) -> None:
+        self.enabled = enabled
+        self._last_printed_key: tuple[object, ...] | None = None
+        self._last_print_time = 0.0
+
+    def __call__(self, status: BotSessionStatus) -> None:
+        if not self.enabled:
+            return
+
+        key = (
+            status.state,
+            status.cycles_completed,
+            status.level_text,
+            status.ready,
+            status.last_action,
+            status.trigger_reason,
+            status.message[:80],
         )
-        result = controller.run_rebuild_loop(settings)
+
+        now = time.monotonic()
+        if key == self._last_printed_key and now - self._last_print_time < 5:
+            return
+
+        self._last_printed_key = key
+        self._last_print_time = now
+
+        print(
+            f"[{status.updated_at}] "
+            f"state={status.state} "
+            f"level={status.level_text} "
+            f"ready={status.ready} "
+            f"cycles={status.cycles_completed} "
+            f"action={status.last_action} "
+            f"trigger={status.trigger_reason} "
+            f"message={status.message}"
+        )
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    settings = settings_from_args(args)
+
+    try:
+        controller = build_bot_session_controller()
+        printer = LiveStatusPrinter(enabled=not args.quiet)
+        result = controller.run_sync(settings, on_status=printer)
+    except KeyboardInterrupt:
+        print("ok: False")
+        print("message: Interrupted by keyboard. Use crafting_bot.cli.bot_stop for a clean external stop request.")
+        return 130
     except Exception as exc:
         print("ok: False")
         print(f"message: {exc}")
@@ -111,8 +180,23 @@ def main() -> int:
     print(f"auto_train_template_score: {args.auto_train_template_score}")
     if args.stop_at_level is not None:
         print(f"stop_at_level: {args.stop_at_level}")
+    print("status_file: logs/bot_status.json")
+    print("stop_command: $env:PYTHONDONTWRITEBYTECODE=\"1\"; python -B -m crafting_bot.cli.bot_stop")
     print("-" * 120)
 
+    if not args.summary_only:
+        print_iterations(result)
+
+    print(f"message: {result.message}")
+    if result.mode == "click":
+        print("safety: This loop stops at --max-cycles or another stop condition. Start with --max-cycles 3.")
+    else:
+        print("safety: Dry-run does not send clicks and stops after one planned cycle because the game cannot advance.")
+
+    return 0 if result.stopped_reason in SUCCESS_STOP_REASONS else 1
+
+
+def print_iterations(result) -> None:
     for iteration in result.iterations:
         scan = iteration.scan
         print(f"iteration {iteration.index}")
@@ -151,13 +235,6 @@ def main() -> int:
                     print(f"         verification_message: {step.verification.message}")
                 print(f"         step_message: {step.message}")
         print("-" * 120)
-
-    print(f"message: {result.message}")
-    if result.mode == "click":
-        print("safety: This loop stops at --max-cycles or another stop condition. Start with --max-cycles 3.")
-    else:
-        print("safety: Dry-run does not send clicks and stops after one planned cycle because the game cannot advance.")
-    return 0 if result.stopped_reason in {"max_cycles_reached", "dry_run_planned_one_cycle", "stop_at_level_reached", "desired_level_reached"} else 1
 
 
 if __name__ == "__main__":

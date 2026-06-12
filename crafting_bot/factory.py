@@ -7,6 +7,9 @@ from crafting_bot.application.bot_controller import BotController
 from crafting_bot.composition.container import BotContainer
 from crafting_bot.infra.adb_client import AdbClient
 from crafting_bot.infra.calibration_store import CalibrationStore
+from crafting_bot.services.bot_command_store import BotCommandStore
+from crafting_bot.services.bot_session_controller import BotSessionController
+from crafting_bot.services.bot_status_store import BotStatusStore
 from crafting_bot.services.calibration_service import CalibrationService
 from crafting_bot.services.cycle_dry_run_service import CycleDryRunService
 from crafting_bot.services.cycle_runner import CycleRunner
@@ -15,8 +18,8 @@ from crafting_bot.services.expected_level_scanner import ExpectedLevelScanner
 from crafting_bot.services.hire_runner import HireRunner
 from crafting_bot.services.level_scanner import LevelScanner
 from crafting_bot.services.rebuild_loop_runner import RebuildLoopRunner
-from crafting_bot.services.reincarnation_runner import ReincarnationRunner
 from crafting_bot.services.recovery_runner import RecoveryRunner
+from crafting_bot.services.reincarnation_runner import ReincarnationRunner
 from crafting_bot.services.reward_selection_service import RewardSelectionService
 from crafting_bot.services.screen_classifier import ScreenClassifier
 from crafting_bot.services.screen_verifier import ScreenVerifier
@@ -40,6 +43,22 @@ def _read_adb_path(config_path: Path) -> str | None:
 
 def build_bot_controller() -> BotController:
     return _container().build_bot_controller()
+
+
+def build_bot_status_store() -> BotStatusStore:
+    return BotStatusStore()
+
+
+def build_bot_command_store() -> BotCommandStore:
+    return BotCommandStore()
+
+
+def build_bot_session_controller() -> BotSessionController:
+    return BotSessionController(
+        bot_controller=build_bot_controller(),
+        status_store=build_bot_status_store(),
+        command_store=build_bot_command_store(),
+    )
 
 
 def build_level_scanner() -> LevelScanner:

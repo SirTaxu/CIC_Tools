@@ -9,6 +9,7 @@ from crafting_bot.infra.adb_client import AdbClient
 from crafting_bot.infra.calibration_store import CalibrationStore
 from crafting_bot.services.calibration_service import CalibrationService
 from crafting_bot.services.cycle_dry_run_service import CycleDryRunService
+from crafting_bot.services.cycle_outcome_confirmer import CycleOutcomeConfirmer
 from crafting_bot.services.cycle_runner import CycleRunner
 from crafting_bot.services.digit_training_service import DigitTrainingService
 from crafting_bot.services.expected_level_scanner import ExpectedLevelScanner
@@ -197,13 +198,92 @@ class BotContainer:
         )
 
     def build_rebuild_loop_runner(self) -> RebuildLoopRunner:
+        # The unattended loop shares one vision stack across its collaborating
+        # services. This keeps template reloads and post-cycle confirmation
+        # consistent: scanner, expected scanner, cycle runner, verifier, and
+        # recovery all see the same ReadyDetector/DigitReader instances.
+        adb = self.build_adb_client()
+        calibration = self.build_calibration_store()
+        ready_detector = self.build_ready_detector()
+        digit_reader = self.build_digit_reader()
+        search_targets = SearchTargetService(
+            calibration=calibration,
+            crop_dir=paths.CALIBRATION_CROP_DIR,
+            preview_dir=paths.DEBUG_CROP_DIR,
+        )
+
+        scanner = LevelScanner(
+            screen_capture=adb,
+            calibration=calibration,
+            ready_detector=ready_detector,
+            digit_reader=digit_reader,
+            screenshot_path=paths.LATEST_SCREENSHOT_PATH,
+            level_crop_path=paths.LATEST_LEVEL_CROP_PATH,
+            level_preview_path=paths.LATEST_LEVEL_PREVIEW_PATH,
+        )
+        expected_scanner = ExpectedLevelScanner(
+            screen_capture=adb,
+            calibration=calibration,
+            ready_detector=ready_detector,
+            digit_reader=digit_reader,
+            screenshot_path=paths.LATEST_SCREENSHOT_PATH,
+            level_crop_path=paths.LATEST_LEVEL_CROP_PATH,
+            level_preview_path=paths.LATEST_LEVEL_PREVIEW_PATH,
+        )
+        verifier = ScreenVerifier(
+            calibration=calibration,
+            scanner=scanner,
+            preview_dir=paths.DEBUG_CROP_DIR,
+        )
+        waiter = ScreenWaiter(
+            adb=adb,
+            verifier=verifier,
+            search_targets=search_targets,
+            latest_screenshot_path=paths.LATEST_SCREENSHOT_PATH,
+        )
+        reward_selector = RewardSelectionService(
+            adb=adb,
+            calibration=calibration,
+            search_targets=search_targets,
+            latest_screenshot_path=paths.LATEST_SCREENSHOT_PATH,
+        )
+        cycle_runner = CycleRunner(
+            scanner=scanner,
+            adb=adb,
+            calibration=calibration,
+            search_targets=search_targets,
+            verifier=verifier,
+            waiter=waiter,
+            target_status=TargetStatusService(calibration),
+            latest_screenshot_path=paths.LATEST_SCREENSHOT_PATH,
+            reward_selector=reward_selector,
+        )
+        classifier = ScreenClassifier(
+            calibration=calibration,
+            scanner=scanner,
+        )
+
         return RebuildLoopRunner(
-            scanner=self.build_level_scanner(),
-            expected_scanner=self.build_expected_level_scanner(),
-            cycle_runner=self.build_cycle_runner(),
-            reincarnation_runner=self.build_reincarnation_runner(),
-            hire_runner=self.build_hire_runner(),
-            recovery_runner=self.build_recovery_runner(),
+            scanner=scanner,
+            expected_scanner=expected_scanner,
+            cycle_runner=cycle_runner,
+            cycle_outcome_confirmer=CycleOutcomeConfirmer(scanner),
+            reincarnation_runner=ReincarnationRunner(
+                adb=adb,
+                calibration=calibration,
+                waiter=waiter,
+                scanner=scanner,
+            ),
+            hire_runner=HireRunner(
+                adb=adb,
+                calibration=calibration,
+                waiter=waiter,
+            ),
+            recovery_runner=RecoveryRunner(
+                classifier=classifier,
+                adb=adb,
+                calibration=calibration,
+            ),
         )
 
     def build_bot_controller(self) -> BotController:

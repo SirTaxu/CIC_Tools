@@ -79,6 +79,8 @@ TARGETS: tuple[TargetDefinition, ...] = (
     TargetDefinition("early_reward_button_check_area", "area", "level1_cycle", "Visual check area for the shared levels 1-5 take-reward panel."),
     TargetDefinition("early_free_button", "point", "level1_cycle", "Level 1 only Free button click point; Y/layout differs from levels 2+."),
     TargetDefinition("early_free_button_check_area", "area", "level1_cycle", "Visual check area for the level 1 only Free screen."),
+    TargetDefinition("early_free_button_alt", "point", "level1_cycle", "Alternate level 1 top blue Free button on the Rebuild-with-head-start screen."),
+    TargetDefinition("early_free_button_alt_check_area", "area", "level1_cycle", "Screen check area for the alternate level 1 Rebuild-with-head-start Free screen."),
 
     # Levels 2+ / level 6+ shared post-rebuild targets.
     TargetDefinition("free_button", "point", "early_cycle", "Normal Free button click point used by levels 2+."),

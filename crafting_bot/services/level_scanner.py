@@ -11,7 +11,7 @@ from crafting_bot.vision.ready_detector import ReadyDetector
 
 
 class LevelScanner:
-    """Coordinates screen capture, level-area crop, digit reading, and ready-state detection."""
+    """Coordinates screen capture, level-area crop, digit reading, and ready-state confirmation."""
 
     def __init__(
         self,
@@ -48,11 +48,11 @@ class LevelScanner:
             digit_score = min((match.score for match in digit_matches), default=None)
             digit_diagnostics = self.digit_reader.diagnostics_for_last_read()
 
-            # Ready templates are only a ready/not-ready detector. They must not
-            # decide or confirm the level number. Do not pass a level hint here;
-            # otherwise a wrong digit read can restrict the ready comparison to
-            # the wrong level's templates and make the debug output misleading.
-            ready_match = self.ready_detector.classify(level_crop, level_hint=None)
+            # Ready/not-ready is confirmed after digit reading so the detector
+            # can compare same-level yes/no templates first. If the level is
+            # unreadable, it falls back to broader cached templates.
+            ready_match = self.ready_detector.classify(level_crop, level_hint=level)
+            ready_diagnostics = self.ready_detector.diagnostics_for_last_match()
 
             return LevelScanResult(
                 ok=True,
@@ -64,8 +64,16 @@ class LevelScanner:
                 ready_template=ready_match.template_path.name if ready_match.template_path else None,
                 digit_score=digit_score,
                 level_crop_path=self.level_crop_path,
-                message=self._format_message(level_text, ready_match.state, ready_match.score, digit_score, digit_diagnostics),
+                message=self._format_message(
+                    level_text,
+                    ready_match.state,
+                    ready_match.score,
+                    digit_score,
+                    digit_diagnostics,
+                    ready_diagnostics,
+                ),
                 digit_diagnostics=digit_diagnostics,
+                ready_diagnostics=ready_diagnostics,
             )
 
         except Exception as exc:
@@ -81,6 +89,7 @@ class LevelScanner:
                 level_crop_path=None,
                 message=f"Scan failed: {exc}",
                 digit_diagnostics=None,
+                ready_diagnostics=None,
             )
 
     @staticmethod
@@ -90,10 +99,13 @@ class LevelScanner:
         ready_score: float | None,
         digit_score: float | None,
         digit_diagnostics: str | None,
+        ready_diagnostics: str | None,
     ) -> str:
         ready_part = f"ready={ready}"
         if ready_score is not None:
             ready_part += f" score={ready_score:.3f}"
+        if ready_diagnostics:
+            ready_part += f" ({ready_diagnostics})"
 
         digit_part = "digit_score=none" if digit_score is None else f"digit_score={digit_score:.3f}"
         if digit_diagnostics:
